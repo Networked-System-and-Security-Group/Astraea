@@ -9,7 +9,7 @@
 #include <doca_error.h>
 
 constexpr double EWMA_COEFF = 0.5;
-constexpr uint32_t MAX_TOKENS_PER_MS = 120;
+constexpr uint32_t MAX_TOKENS_PER_MS = 18;
 constexpr uint32_t AVAIL_TOKENS_PER_MS = MAX_TOKENS_PER_MS * 0.9;
 constexpr uint32_t RESERVED_TOKENS_PER_MS =
     MAX_TOKENS_PER_MS - AVAIL_TOKENS_PER_MS;

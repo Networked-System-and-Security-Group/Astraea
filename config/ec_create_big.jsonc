@@ -1,9 +1,9 @@
 {
-    "doca_program_flags":{
+    "doca_program_flags": {
         "nb_data_blocks": 128,
         "nb_rdnc_blocks": 32,
-        "block_size": 1048576,
-        "nb_tasks": 4,
-        "latency": 18674 /* In us, double of average execution time */
+        "block_size": 65536,
+        "nb_tasks": 256,
+        "latency": 10000
     }
-  }
+}

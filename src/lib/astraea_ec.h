@@ -58,7 +58,7 @@ struct astraea_ec_matrix {
 
 struct astraea_ec_task_create {
     /* Resources managed by task itself */
-    std::vector<_astraea_ec_subtask_create *> subtasks;
+    // std::vector<_astraea_ec_subtask_create *> subtasks;
     std::vector<std::pair<doca_buf *, doca_buf *>> sub_buf_pairs;
     _astraea_ec_subtask_create *subtask_pool[MAX_NB_SUBTASKS_PER_TASK];
     uint32_t cur_subtask_pos;
@@ -78,12 +78,15 @@ struct astraea_ec_task_create {
     bool is_free;
 };
 
+enum astraea_ec_matrix_type {
+    ASTRAEA_EC_MATRIX_TYPE_CAUCHY = DOCA_EC_MATRIX_TYPE_CAUCHY,
+    ASTRAEA_EC_MATRIX_TYPE_VANDERMONDE = DOCA_EC_MATRIX_TYPE_VANDERMONDE,
+};
+
 struct astraea_ec {
     doca_ec *ec;
     astraea_ec_task_create_completion_cb_t success_cb;
     astraea_ec_task_create_completion_cb_t error_cb;
-    std::queue<doca_ec_task_create *> ec_create_tasks; /* Sub tasks */
-    std::mutex ec_create_tasks_lock;
     doca_dev *dev;
 
     void *tmp_rdnc_buffer;
@@ -91,7 +94,14 @@ struct astraea_ec {
     doca_buf_inventory *buf_inventory;
 
     astraea_ec_task_create *task_pool[MAX_NB_INFLIGHT_EC_TASKS];
-    uint32_t cur_task_pos;
+    /**
+     * It is a producer-consumer model
+     * prod_pos will move only when a task is submitted
+     * We assume tasks are submitted in FIFO
+     */
+    doca_ec_task_create *subtask_queue[MAX_NB_INFLIGHT_EC_TASKS];
+    std::mutex subtask_locks[MAX_NB_INFLIGHT_EC_TASKS];
+    uint32_t prod_pos, cons_pos, alloc_pos;
 };
 
 doca_error_t astraea_ec_create(doca_dev *dev, astraea_ec **ec);
@@ -113,7 +123,8 @@ doca_error_t astraea_ec_task_create_allocate_init(
 
 astraea_task *astraea_ec_task_create_as_task(astraea_ec_task_create *task);
 
-doca_error_t astraea_ec_matrix_create(astraea_ec *ec, doca_ec_matrix_type type,
+doca_error_t astraea_ec_matrix_create(astraea_ec *ec,
+                                      astraea_ec_matrix_type type,
                                       size_t data_block_count,
                                       size_t rdnc_block_count,
                                       astraea_ec_matrix **matrix);

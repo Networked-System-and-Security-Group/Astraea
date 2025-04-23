@@ -51,4 +51,12 @@ class ec_create_resources {
     doca_error_t open_dev();
 };
 
+struct ec_create_user_data {
+    std::vector<std::chrono::high_resolution_clock::time_point> *begin_time_arr;
+    std::vector<std::chrono::high_resolution_clock::time_point> *end_time_arr;
+    ec_create_resources *rscs;
+    uint32_t *nb_finished_tasks;
+    uint32_t nb_total_tasks;
+};
+
 doca_error_t ec_create(const ec_create_config &cfg);

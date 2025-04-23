@@ -26,35 +26,57 @@ static void worker(std::stop_token stoken, astraea_ctx *ctx) {
     while (!stoken.stop_requested()) {
         switch (ctx->type) {
         case EC:
+            astraea_ec *ec = ctx->ec;
+            uint32_t nb_submitted_tasks = 0;
+            uint32_t nb_avail_tokens = 0;
+
+            /* Get avail tokens */
             if (sem_wait(ec_token_sem)) {
                 DOCA_LOG_ERR("Failed to get ec_token_sem");
                 break;
             }
 
-            std::lock_guard<std::mutex> task_queue_guard{
-                ctx->ec->ec_create_tasks_lock};
-            std::lock_guard<std::mutex> ctx_guard{ctx->ctx_lock};
+            nb_avail_tokens = shm_data->ec_tokens[app_id];
 
-            while (shm_data->ec_tokens[app_id] > 0 &&
-                   !ctx->ec->ec_create_tasks.empty()) {
+            if (sem_post(ec_token_sem)) {
+                DOCA_LOG_ERR("Failed to post ec_token_sem");
+                break;
+            }
+
+            ec->subtask_locks[ec->cons_pos].lock();
+            ec->subtask_locks[ec->cons_pos].unlock();
+
+            if (nb_avail_tokens > 0 && ec->cons_pos < ec->prod_pos) {
+
+                ctx->ctx_lock.lock();
                 doca_error_t status =
                     doca_task_submit(doca_ec_task_create_as_task(
-                        ctx->ec->ec_create_tasks.front()));
+                        ctx->ec->subtask_queue[ec->cons_pos]));
+
+                ctx->ctx_lock.unlock();
                 if (status == DOCA_SUCCESS) {
-                    ctx->ec->ec_create_tasks.pop();
-                    shm_data->ec_tokens[app_id]--;
+                    ec->cons_pos++;
+                    nb_avail_tokens--;
+                    nb_submitted_tasks++;
                 } else {
                     DOCA_LOG_ERR("Failed to submit sub task: %s",
                                  doca_error_get_descr(status));
                 }
             }
 
+            if (sem_wait(ec_token_sem)) {
+                DOCA_LOG_ERR("Failed to get ec_token_sem");
+                break;
+            }
+
+            shm_data->ec_tokens[app_id] -= nb_submitted_tasks;
+
             if (sem_post(ec_token_sem)) {
                 DOCA_LOG_ERR("Failed to post ec_token_sem");
                 break;
             }
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
 }
 
@@ -75,6 +97,12 @@ doca_error_t astraea_ctx_stop(astraea_ctx *ctx) {
      */
     if (ctx->submitter) {
         ctx->submitter->request_stop();
+        if (ctx->type == EC) {
+            for (uint32_t i = ctx->ec->prod_pos; i < MAX_NB_INFLIGHT_EC_TASKS;
+                 i++) {
+                ctx->ec->subtask_locks[i].unlock();
+            }
+        }
         delete ctx->submitter;
         ctx->submitter = nullptr;
     }

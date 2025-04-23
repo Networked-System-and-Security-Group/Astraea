@@ -54,11 +54,17 @@ doca_error_t astraea_pe_destroy(astraea_pe *pe) {
 }
 
 uint8_t astraea_pe_progress(astraea_pe *pe) {
-    std::vector<std::unique_lock<std::mutex>> locks;
+    /* Lock all ctx */
     for (astraea_ctx *ctx : pe->ctxs) {
-        locks.push_back(std::unique_lock<std::mutex>{ctx->ctx_lock});
+        ctx->ctx_lock.lock();
     }
+
     doca_pe_progress(pe->pe);
+
+    /* Unlock all ctx */
+    for (astraea_ctx *ctx : pe->ctxs) {
+        ctx->ctx_lock.unlock();
+    }
 
     if (has_finished_task) {
         has_finished_task = false;
@@ -69,8 +75,6 @@ uint8_t astraea_pe_progress(astraea_pe *pe) {
 
 doca_error_t astraea_task_submit(astraea_task *task) {
     if (task->type == EC_CREATE) {
-        std::lock_guard<std::mutex> guard{
-            task->ec_task_create->ec->ec_create_tasks_lock};
 
         auto cur_time = std::chrono::high_resolution_clock::now();
 
@@ -79,9 +83,14 @@ doca_error_t astraea_task_submit(astraea_task *task) {
             (last_expect_time > cur_time ? last_expect_time : cur_time);
         task->ec_task_create->expected_time = last_expect_time;
 
-        for (_astraea_ec_subtask_create *subtask :
-             task->ec_task_create->subtasks) {
-            task->ec_task_create->ec->ec_create_tasks.push(subtask->task);
+        uint32_t nb_sub_tasks = task->ec_task_create->cur_subtask_pos;
+        astraea_ec *ec = task->ec_task_create->ec;
+        for (uint32_t i = 0; i < nb_sub_tasks; i++) {
+            ec->subtask_queue[ec->prod_pos] =
+                task->ec_task_create->subtask_pool[i]->task;
+            /* Unlock subtask for consumer */
+            ec->subtask_locks[ec->prod_pos].unlock();
+            ec->prod_pos++;
         }
     }
     return DOCA_SUCCESS;
@@ -90,7 +99,10 @@ doca_error_t astraea_task_submit(astraea_task *task) {
 void astraea_task_free(astraea_task *task) { delete task; }
 
 doca_error_t astraea_pe_connect_ctx(astraea_pe *pe, astraea_ctx *ctx) {
-    std::lock_guard<std::mutex> guard{ctx->ctx_lock};
+    /**
+     * We don't need to lock ctx here
+     * As this always happen before task submitting
+     */
     doca_error_t status = doca_pe_connect_ctx(pe->pe, ctx->ctx);
     if (status == DOCA_SUCCESS) {
         pe->ctxs.push_back(ctx);

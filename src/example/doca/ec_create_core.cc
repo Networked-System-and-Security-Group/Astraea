@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 #include <unistd.h>
 
 #include <doca_buf.h>
@@ -59,14 +60,49 @@ void ec_create_success_cb(doca_ec_task_create *task, doca_data task_user_data,
                           doca_data ctx_user_data) {
     (void)task;
     (void)ctx_user_data;
-    uint32_t *nb_finished_tasks = static_cast<uint32_t *>(task_user_data.ptr);
+
+    ec_create_user_data *user_data =
+        static_cast<ec_create_user_data *>(task_user_data.ptr);
+    user_data->end_time_arr->push_back(
+        std::chrono::high_resolution_clock::now());
+
+    uint32_t *nb_finished_tasks = user_data->nb_finished_tasks;
     (*nb_finished_tasks)++;
+
+    if (*nb_finished_tasks == user_data->nb_total_tasks) {
+        return;
+    }
+
+    ec_create_resources *rscs = user_data->rscs;
+    doca_ec_task_create *new_task;
+
+    user_data->begin_time_arr->push_back(
+        std::chrono::high_resolution_clock::now());
+
+    doca_error_t status = doca_ec_task_create_allocate_init(
+        rscs->ec, rscs->matrix, rscs->src_buf,
+        rscs->dst_bufs[*nb_finished_tasks], {.ptr = user_data}, &new_task);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to allocate and init ec task: %s",
+                     doca_error_get_descr(status));
+        return;
+    }
+
+    status = doca_task_submit(doca_ec_task_create_as_task(new_task));
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to submit task: %s", doca_error_get_descr(status));
+        return;
+    }
+    rscs->tasks.push_back(new_task);
 }
 void ec_create_error_cb(doca_ec_task_create *task, doca_data task_user_data,
                         doca_data ctx_user_data) {
     (void)task;
     (void)ctx_user_data;
-    uint32_t *nb_finished_tasks = static_cast<uint32_t *>(task_user_data.ptr);
+
+    ec_create_user_data *user_data =
+        static_cast<ec_create_user_data *>(task_user_data.ptr);
+    uint32_t *nb_finished_tasks = user_data->nb_finished_tasks;
     (*nb_finished_tasks)++;
     DOCA_LOG_ERR("EC create task failed");
 }
@@ -124,40 +160,51 @@ doca_error_t ec_create(const ec_create_config &cfg) {
     DOCA_LOG_INFO("Wait for signal SIGUSR1 to continue");
     sigwait(&mask, &sig);
 
-    auto begin_time = std::chrono::high_resolution_clock::now();
-
+    std::vector<std::chrono::high_resolution_clock::time_point> begin_time_arr;
+    std::vector<std::chrono::high_resolution_clock::time_point> end_time_arr;
     uint32_t nb_finished_tasks = 0;
-    for (uint32_t i = 0; i < cfg.nb_tasks; i++) {
-        doca_ec_task_create *task;
-        status = doca_ec_task_create_allocate_init(
-            rscs.ec, rscs.matrix, rscs.src_buf, rscs.dst_bufs[i],
-            {.ptr = &nb_finished_tasks}, &task);
-        if (status != DOCA_SUCCESS) {
-            DOCA_LOG_ERR("Failed to allocate and init ec task: %s",
-                         doca_error_get_descr(status));
-            return status;
-        }
+    ec_create_user_data user_data = {.begin_time_arr = &begin_time_arr,
+                                     .end_time_arr = &end_time_arr,
+                                     .rscs = &rscs,
+                                     .nb_finished_tasks = &nb_finished_tasks,
+                                     .nb_total_tasks = cfg.nb_tasks};
 
-        status = doca_task_submit(doca_ec_task_create_as_task(task));
-        if (status != DOCA_SUCCESS) {
-            DOCA_LOG_ERR("Failed to submit task: %s",
-                         doca_error_get_descr(status));
-            return status;
-        }
-        rscs.tasks.push_back(task);
+    doca_ec_task_create *task;
+    begin_time_arr.push_back(std::chrono::high_resolution_clock::now());
+    status = doca_ec_task_create_allocate_init(rscs.ec, rscs.matrix,
+                                               rscs.src_buf, rscs.dst_bufs[0],
+                                               {.ptr = &user_data}, &task);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to allocate and init ec task: %s",
+                     doca_error_get_descr(status));
+        return status;
     }
 
-    while (nb_finished_tasks < cfg.nb_tasks)
+    status = doca_task_submit(doca_ec_task_create_as_task(task));
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to submit task: %s", doca_error_get_descr(status));
+        return status;
+    }
+    rscs.tasks.push_back(task);
+
+    while (nb_finished_tasks < cfg.nb_tasks) {
         (void)doca_pe_progress(rscs.pe);
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < cfg.nb_tasks; i++) {
+        std::chrono::high_resolution_clock::time_point begin_time =
+            begin_time_arr[i];
+        std::chrono::high_resolution_clock::time_point end_time =
+            end_time_arr[i];
 
-    double time_cost_in_ms =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
-                                                             begin_time)
-            .count() /
-        (double)1000000;
-    DOCA_LOG_INFO("All tasks finished, taking %fms", time_cost_in_ms);
+        double time_cost_in_ms =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
+                                                                 begin_time)
+                .count() /
+            (double)1000000;
+        printf("%f%s", time_cost_in_ms, i == cfg.nb_tasks - 1 ? "\n" : "\n");
+    }
     write_to_file(static_cast<uint8_t *>(rscs.mmap_buffer) +
                       cfg.nb_data_blocks * cfg.block_size,
                   cfg.nb_rdnc_blocks * cfg.block_size, "./out/doca");

@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -171,8 +172,13 @@ doca_error_t astraea_ec_create(doca_dev *dev, astraea_ec **ec) {
         return status;
     }
 
-    new_ec->cur_task_pos = 0;
+    new_ec->prod_pos = 0;
+    new_ec->cons_pos = 0;
+    new_ec->alloc_pos = 0;
     for (uint32_t i = 0; i < MAX_NB_INFLIGHT_EC_TASKS; i++) {
+        /* Lock all subtasks */
+        new_ec->subtask_locks[i].lock();
+
         new_ec->task_pool[i] = new astraea_ec_task_create;
         new_ec->task_pool[i]->cur_subtask_pos = 0;
         new_ec->task_pool[i]->is_free = false;
@@ -245,18 +251,16 @@ doca_error_t astraea_ec_task_create_set_conf(
         ec->ec, subtask_success_cb, subtask_error_cb, MAX_NB_INFLIGHT_EC_TASKS);
 }
 
+/* Base time cost when params are 128, 32, 8192 */
+constexpr double base_time_cost = 56.350550;
 static inline uint32_t calc_token_cost(uint32_t nb_data_blocks,
                                        uint32_t nb_rdnc_blocks,
                                        size_t block_size) {
-    if (nb_data_blocks == 128 && nb_rdnc_blocks == 32 && block_size == 1024) {
-        return 1;
-    }
-
-    if (nb_data_blocks == 128 && nb_rdnc_blocks == 32 &&
-        block_size == 1024 * 1024) {
-        return 1024;
-    }
-    return 1;
+    /* This formula is derived from logarithmic fitting */
+    double time_cost_prediction =
+        std::exp(-8.9313) * std::pow(block_size, 0.9628) *
+        std::pow(nb_data_blocks, 0.5673) * std::pow(nb_rdnc_blocks, 0.4428);
+    return time_cost_prediction / base_time_cost;
 }
 
 /**
@@ -292,6 +296,7 @@ static size_t calc_granularity(astraea_ec_task_create *task) {
                       : nb_avail_tokens < 512  ? 256 * 1024
                       : nb_avail_tokens < 1024 ? 512 * 1024
                                                : 1024 * 1024;
+        granularity /= 2;
     }
 
     if (sem_post(ec_token_sem)) {
@@ -344,7 +349,7 @@ doca_error_t astraea_ec_task_create_allocate_init(
     doca_buf *original_data_blocks, doca_buf *rdnc_blocks, doca_data user_data,
     astraea_ec_task_create **task) {
     *task = nullptr;
-    astraea_ec_task_create *new_task = ec->task_pool[ec->cur_task_pos++];
+    astraea_ec_task_create *new_task = ec->task_pool[ec->alloc_pos++];
 
     size_t src_buf_size;
     doca_error_t status =
@@ -451,7 +456,6 @@ doca_error_t astraea_ec_task_create_allocate_init(
                 DOCA_LOG_ERR("Failed to create sub task");
                 return status;
             }
-            new_task->subtasks.push_back(subtask);
             new_task->sub_buf_pairs.push_back(
                 std::make_pair(stsk_ctx.sub_src_buf, stsk_ctx.sub_dst_buf));
         }
@@ -469,8 +473,6 @@ doca_error_t astraea_ec_task_create_allocate_init(
             DOCA_LOG_ERR("Failed to create sub task");
             return status;
         }
-
-        new_task->subtasks.push_back(subtask);
     }
     *task = new_task;
     return DOCA_SUCCESS;
@@ -483,7 +485,8 @@ astraea_task *astraea_ec_task_create_as_task(astraea_ec_task_create *task) {
     return general_task;
 }
 
-doca_error_t astraea_ec_matrix_create(astraea_ec *ec, doca_ec_matrix_type type,
+doca_error_t astraea_ec_matrix_create(astraea_ec *ec,
+                                      astraea_ec_matrix_type type,
                                       size_t data_block_count,
                                       size_t rdnc_block_count,
                                       astraea_ec_matrix **matrix) {
@@ -491,8 +494,12 @@ doca_error_t astraea_ec_matrix_create(astraea_ec *ec, doca_ec_matrix_type type,
     (*matrix)->nb_data_blocks = data_block_count;
     (*matrix)->nb_rdnc_blocks = rdnc_block_count;
 
+    doca_ec_matrix_type demt = type == ASTRAEA_EC_MATRIX_TYPE_CAUCHY
+                                   ? DOCA_EC_MATRIX_TYPE_CAUCHY
+                                   : DOCA_EC_MATRIX_TYPE_VANDERMONDE;
+
     doca_error_t status = doca_ec_matrix_create(
-        ec->ec, type, data_block_count, rdnc_block_count, &(*matrix)->matrix);
+        ec->ec, demt, data_block_count, rdnc_block_count, &(*matrix)->matrix);
     if (status != DOCA_SUCCESS) {
         delete *matrix;
         *matrix = nullptr;
