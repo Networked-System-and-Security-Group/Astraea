@@ -252,14 +252,15 @@ doca_error_t astraea_ec_task_create_set_conf(
 }
 
 /* Base time cost when params are 128, 32, 8192 */
-constexpr double base_time_cost = 56.350550;
+constexpr double base_time_cost = 73.672188;
 static inline uint32_t calc_token_cost(uint32_t nb_data_blocks,
                                        uint32_t nb_rdnc_blocks,
                                        size_t block_size) {
     /* This formula is derived from logarithmic fitting */
     double time_cost_prediction =
-        std::exp(-8.9313) * std::pow(block_size, 0.9628) *
-        std::pow(nb_data_blocks, 0.5673) * std::pow(nb_rdnc_blocks, 0.4428);
+        (2.82268116e-04 * nb_data_blocks + 2.55153425e-03) *
+        (2.08178676e-03 * nb_rdnc_blocks + 6.82958278e-02) *
+        (1.64268580e+00 * block_size - 7.53855770e+03);
     return time_cost_prediction / base_time_cost;
 }
 
