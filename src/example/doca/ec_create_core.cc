@@ -203,7 +203,7 @@ doca_error_t ec_create(const ec_create_config &cfg) {
                                                                  begin_time)
                 .count() /
             (double)1000000;
-        printf("%f%s", time_cost_in_ms, i == cfg.nb_tasks - 1 ? "\n" : "\n");
+        printf("%f%s", time_cost_in_ms, i == cfg.nb_tasks - 1 ? "\n" : ",");
     }
     write_to_file(static_cast<uint8_t *>(rscs.mmap_buffer) +
                       cfg.nb_data_blocks * cfg.block_size,
