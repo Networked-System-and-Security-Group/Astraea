@@ -153,8 +153,6 @@ void astraea_scheduler::refresh_tokens() {
                          (1 - EWMA_COEFF) * allocated_ec_tokens[i];
         pred_sum += pred_tokens[i];
         deficit_sum += shm_data->deficits[i];
-        /* Clear deficits */
-        shm_data->deficits[i] = 0;
     }
 
     for (uint32_t i = 0; i < shm_data->nb_apps; i++) {
@@ -163,6 +161,8 @@ void astraea_scheduler::refresh_tokens() {
                              : pred_tokens[i] / pred_sum * AVAIL_TOKENS_PER_MS +
                                    shm_data->deficits[i] / deficit_sum *
                                        RESERVED_TOKENS_PER_MS;
+        /* Clear deficits */
+        shm_data->deficits[i] = 0;
         /* Deal with initial state */
         if (nb_allocated_tokens == 0) {
             nb_allocated_tokens = MAX_TOKENS_PER_MS / shm_data->nb_apps;
