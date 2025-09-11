@@ -1,0 +1,6 @@
+.cache
+build
+*.txt
+*.tex
+*.py
+*.pdf
