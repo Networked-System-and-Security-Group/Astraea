@@ -272,7 +272,7 @@ static inline doca_error_t submitCreateSubTask(Ec *aEc, doca_buf *aSrcBuf,
 doca_error_t EcTaskCreate::submit() {
     const size_t granularity = gSharedData->appDatas[gAppId].granularity;
     const size_t blkSize = mSrcBuf->mDataLen / mMat->mNbDataBlks;
-    const u32 nbStrips = blkSize / granularity;
+    const u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
 
     auto curTime = std::chrono::high_resolution_clock::now();
     mExpectTime = std::chrono::microseconds(gSla) +
@@ -373,7 +373,7 @@ static inline doca_error_t submitRecoverSubTask(Ec *aEc, doca_buf *aSrcBuf,
 doca_error_t EcTaskRecover::submit() {
     const size_t granularity = gSharedData->appDatas[gAppId].granularity;
     const size_t blkSize = mSrcBuf->mDataLen / mMat->mNbDataBlks;
-    const u32 nbStrips = blkSize / granularity;
+    const u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
 
     auto curTime = std::chrono::high_resolution_clock::now();
     mExpectTime = std::chrono::microseconds(gSla) +
