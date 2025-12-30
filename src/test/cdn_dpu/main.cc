@@ -1,3 +1,8 @@
+#include <doca_argp.h>
+#include <doca_error.h>
+#include <doca_log.h>
+#include <signal.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -6,17 +11,11 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <signal.h>
 #include <thread>
 #include <vector>
 
-#include <doca_argp.h>
-#include <doca_error.h>
-#include <doca_log.h>
-
 #include "cdn_dpu.h"
 #include "common.h"
-#include "rdma.h"
 
 DOCA_LOG_REGISTER(CDN:DPU : MAIN);
 
@@ -67,8 +66,7 @@ static void processAndWriteData(const std::vector<std::vector<double>> &data,
         if (file.is_open()) {
             file << "[";
             for (size_t i = 0; i < merged.size(); ++i) {
-                if (i > 0)
-                    file << ", ";
+                if (i > 0) file << ", ";
                 file << merged[i];
             }
             file << "]" << std::endl;
@@ -129,7 +127,6 @@ static doca_error_t registerParams(CdnCfg &cfg) {
 }
 
 doca_error_t worker(const CdnCfg &aCfg, CdnRscs &rscs) {
-
     CHECK_RETURN(init(aCfg, rscs), "init app");
 
     while (!gCanStart) {
@@ -189,8 +186,7 @@ int main(int argc, char **argv) {
 
     DOCA_LOG_INFO("Press enter to run tasks");
     int enter = 0;
-    while (enter != '\r' && enter != '\n')
-        enter = getchar();
+    while (enter != '\r' && enter != '\n') enter = getchar();
     gCanStart = true;
     beginTime = std::chrono::high_resolution_clock::now();
 

@@ -1,25 +1,29 @@
+#include <doca_buf.h>
+#include <doca_buf_inventory.h>
+#include <doca_ctx.h>
+#include <doca_dev.h>
+#include <doca_erasure_coding.h>
+#include <doca_mmap.h>
+#include <doca_pe.h>
+#include <doca_rdma.h>
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <doca_ctx.h>
-#include <doca_dev.h>
-#include <doca_pe.h>
 #include <vector>
-
-#include <doca_buf.h>
-#include <doca_buf_inventory.h>
-#include <doca_mmap.h>
-
-#include <doca_erasure_coding.h>
-#include <doca_rdma.h>
 
 constexpr uint32_t kNbDataBlks = 128;
 constexpr uint32_t kNbRdncBlks = 32;
 
 struct alignas(64) CdnRscs;
+struct alignas(64) CdnCfg;
+
 struct alignas(64) CdnUserData {
     CdnRscs &rscs;
+    const CdnCfg &cfg;
     uint32_t taskId;
+    uint32_t chunk_id;
+    uint32_t nb_chunks;
 };
 
 struct alignas(64) CdnRscs {
@@ -55,6 +59,7 @@ struct alignas(64) CdnRscs {
     /* Task resources */
     /* Read Tasks */
     std::vector<CdnUserData> userDatas;
+    std::vector<doca_rdma_task_receive *> recvTasks;
     std::vector<doca_rdma_task_write *> writeTasks;
     std::vector<doca_ec_task_recover *> ecTasks;
 
