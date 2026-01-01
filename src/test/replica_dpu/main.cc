@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
     ReplicaCfg cfg = {.ibdevName = "mlx5_2",
                       .gidIdx = 1,
                       .hostIpAddr = "11.5.5.5",
-                      .clientIpAddr = "10.5.5.5",
+                      .clientIpAddr = "192.168.200.1",
                       .nbThreads = 3,
                       .nbTasks = 2,
                       .blkSize = 65536};

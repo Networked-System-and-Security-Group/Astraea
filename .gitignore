@@ -4,3 +4,4 @@ build
 *.tex
 *.py
 *.pdf
+*.csv
