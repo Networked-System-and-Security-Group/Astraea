@@ -61,9 +61,11 @@ doca_error_t worker(const ReplicaCfg &aCfg, ReplicaRscs &rscs) {
 int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
+    // Increased mmapSize to accommodate large offsets in traces (e.g., 2GB)
+    // In a real scenario, this should probably match the device capacity or be CLI configurable
     ReplicaCfg cfg = {.ibdevName = "mlx5_2",
                       .gidIdx = 1,
-                      .mmapSize = kSendSize * kTaskPoolSize,
+                      .mmapSize = 2UL * 1024 * 1024 * 1024, 
                       .nbThreads = 3};
 
     CHECK_RETURN(doca_argp_init("replica_client", &cfg), "init argp");

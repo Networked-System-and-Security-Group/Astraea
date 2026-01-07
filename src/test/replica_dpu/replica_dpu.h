@@ -5,6 +5,10 @@
 #include <doca_dev.h>
 #include <doca_pe.h>
 #include <vector>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <string>
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
@@ -15,6 +19,15 @@
 
 constexpr uint32_t kNbDataBlks = 128;
 constexpr uint32_t kNbRdncBlks = 32;
+
+// Trace record structure
+struct TraceRecord {
+    uint32_t device_id;
+    uint32_t opcode;
+    uint64_t offset;
+    uint32_t length;
+    uint64_t timestamp;
+};
 
 struct alignas(64) ReplicaRscs;
 struct alignas(64) ReplicaUserData {
@@ -52,6 +65,8 @@ struct alignas(64) ReplicaRscs {
     /* Client memory */
     doca_mmap *clientMmap;
     std::vector<doca_buf *> clientBufs;
+    // Base address of remote memory to calculate offsets
+    char* clientBaseAddr; 
 
     /* Task resources */
     /* Read Tasks */
@@ -59,6 +74,14 @@ struct alignas(64) ReplicaRscs {
     std::vector<doca_rdma_task_read *> readTasks;
     std::vector<doca_rdma_task_write *> writeTasks;
     std::vector<doca_ec_task_create *> ecTasks;
+
+    /* Trace Data */
+    std::vector<TraceRecord> traces;
+
+    /* Concurrency Control for Trace Replay */
+    std::queue<uint32_t> freeTaskIds;
+    std::mutex taskMutex;
+    std::condition_variable taskCv;
 
     /* Thread metadata, should init by main thread */
     uint32_t threadId;
@@ -78,6 +101,7 @@ struct alignas(64) ReplicaCfg {
     uint16_t nbThreads;
     uint32_t nbTasks;
     size_t blkSize;
+    char tracePath[1024]; // Path to CSV file
 };
 
 doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &oCtx);

@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <thread>
 #include <vector>
+#include <memory> 
 
 #include <doca_argp.h>
 #include <doca_error.h>
@@ -109,6 +110,12 @@ doca_error_t blkSzCb(void *aBlkSz, void *aCfg) {
     return DOCA_SUCCESS;
 }
 
+static doca_error_t tracePathCb(void *aTracePath, void *aCfg) {
+    size_t len = strlen(static_cast<char *>(aTracePath));
+    memcpy(static_cast<ReplicaCfg *>(aCfg)->tracePath, aTracePath, len);
+    return DOCA_SUCCESS;
+}
+
 static doca_error_t registerParams(ReplicaCfg &cfg) {
     CHECK_RETURN(
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
@@ -127,6 +134,9 @@ static doca_error_t registerParams(ReplicaCfg &cfg) {
     CHECK_RETURN(
         registerOneParam("bs", "block size", DOCA_ARGP_TYPE_INT, blkSzCb),
         "register block size cb");
+    CHECK_RETURN(
+        registerOneParam("f", "trace file path", DOCA_ARGP_TYPE_STRING, tracePathCb),
+        "register trace file path cb");
     return DOCA_SUCCESS;
 }
 
@@ -159,9 +169,10 @@ int main(int argc, char **argv) {
                       .gidIdx = 1,
                       .hostIpAddr = "11.5.5.5",
                       .clientIpAddr = "192.168.200.1",
-                      .nbThreads = 3,
+                      .nbThreads = 1, // Default to 1 for trace replay simplicity
                       .nbTasks = 2,
-                      .blkSize = 65536};
+                      .blkSize = 65536,
+                      .tracePath = "../../../data/alibaba_data.csv"};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
 
@@ -170,23 +181,27 @@ int main(int argc, char **argv) {
     CHECK_RETURN(doca_argp_start(argc, argv), "start argp");
 
     CHECK_RETURN(doca_argp_destroy(), "destroy argp");
-    DOCA_LOG_INFO("Cur config: nbThreads is %u, nbTasks is %u, blkSize is %lu",
-                  cfg.nbThreads, cfg.nbTasks, cfg.blkSize);
+    DOCA_LOG_INFO("Cur config: nbThreads is %u, nbTasks is %u, blkSize is %lu, trace is %s",
+                  cfg.nbThreads, cfg.nbTasks, cfg.blkSize, cfg.tracePath);
 
     const uint16_t basePort = 12345;
-    std::vector<ReplicaRscs> rscss;
+    std::vector<std::unique_ptr<ReplicaRscs>> rscss;
+    
     for (uint16_t i = 0; i < cfg.nbThreads; i++) {
         uint16_t portId = basePort + i;
-        ReplicaRscs rscs = {.threadId = i,
-                            .nbFinishedTasks = 0,
-                            .nbFreedTasks = 0,
-                            .port = portId};
-        rscss.push_back(rscs);
+        auto rscs = std::make_unique<ReplicaRscs>();
+        
+        rscs->threadId = i;
+        rscs->nbFinishedTasks = 0;
+        rscs->nbFreedTasks = 0;
+        rscs->port = portId;
+        
+        rscss.push_back(std::move(rscs));
     }
 
     std::vector<std::thread> threads;
-    for (ReplicaRscs &rscs : rscss) {
-        threads.emplace_back(worker, cfg, std::ref(rscs));
+    for (auto &rscsPtr : rscss) {
+        threads.emplace_back(worker, cfg, std::ref(*rscsPtr));
     }
 
     DOCA_LOG_INFO("Press enter to run tasks");
@@ -203,20 +218,20 @@ int main(int argc, char **argv) {
     for (std::thread &thread : threads) {
         thread.join();
     }
-
+    
     std::vector<std::vector<double>> allCosts;
-    for (const ReplicaRscs &rscs : rscss) {
-        allCosts.push_back(rscs.timeCosts);
+    for (const auto &rscsPtr : rscss) {
+        allCosts.push_back(rscsPtr->timeCosts);
     }
 
     processAndWriteData(allCosts, getenv("RES_PATH"));
 
     double nbProcessedGBits = 0;
     uint32_t nbOps = 0;
-    for (const ReplicaRscs &rscs : rscss) {
-        nbProcessedGBits += static_cast<double>(rscs.nbFinishedTasks) / 1e9 *
+    for (const auto &rscsPtr : rscss) {
+        nbProcessedGBits += static_cast<double>(rscsPtr->nbFinishedTasks) / 1e9 *
                             kNbDataBlks * cfg.blkSize * 8;
-        nbOps += rscs.nbFinishedTasks;
+        nbOps += rscsPtr->nbFinishedTasks;
     }
 
     const double timeCost =
