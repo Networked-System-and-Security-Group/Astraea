@@ -23,7 +23,7 @@ constexpr uint32_t kNbRdncBlks = 32;
 // Trace record structure
 struct TraceRecord {
     uint32_t device_id;
-    uint32_t opcode;
+    char opcode;
     uint64_t offset;
     uint32_t length;
     uint64_t timestamp;

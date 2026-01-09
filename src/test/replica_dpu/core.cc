@@ -49,7 +49,7 @@ static void loadTrace(const char* path, std::vector<TraceRecord>& traces) {
         
         // CSV: device_id,opcode,offset,length,timestamp
         std::getline(ss, val, ','); rec.device_id = std::stoul(val);
-        std::getline(ss, val, ','); rec.opcode = std::stoul(val);
+        std::getline(ss, val, ','); rec.opcode = val[0]; 
         std::getline(ss, val, ','); rec.offset = std::stoull(val);
         std::getline(ss, val, ','); rec.length = std::stoul(val);
         std::getline(ss, val, ','); rec.timestamp = std::stoull(val);
