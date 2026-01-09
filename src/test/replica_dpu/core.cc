@@ -59,79 +59,85 @@ static void loadTrace(const char* path, std::vector<TraceRecord>& traces) {
     DOCA_LOG_INFO("Loaded %lu trace records", traces.size());
 }
 
+static void handleTaskCompletion(ReplicaUserData *userData, bool success) {
+    ReplicaRscs &rscs = userData->rscs;
+    uint32_t taskId = userData->taskId;
+
+    // 必须在锁内检查 gForceQuit，防止主线程刚清理完，这里又把任务放回去
+    std::unique_lock<std::mutex> lock(rscs.taskMutex);
+    
+    if (!gForceQuit && success) {
+        // 正常运行且任务成功：放回队列供下次使用
+        rscs.freeTaskIds.push(taskId);
+        rscs.taskCv.notify_all(); // 唤醒正在等待任务的主线程
+    } else {
+        // 正在退出 或 任务失败：直接释放资源
+        // 此时持有锁，确保主线程不会同时操作该 taskId (虽然主线程只操作队列)
+        // 但更重要的是，如果 gForceQuit 为 true，我们绝不把任务放回队列
+        
+        lock.unlock(); // 释放资源不需要持有锁，提前解锁减少竞争
+
+        if (!success) {
+            gForceQuit = true; // 发生错误强制退出
+            DOCA_LOG_ERR("Task failed, aborting...");
+        }
+
+        doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[taskId]));
+        doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
+        rscs.nbFreedTasks++;
+        
+        // [至关重要] 唤醒主线程！否则主线程可能卡在 taskCv.wait() 永远无法退出
+        rscs.taskCv.notify_all();
+    }
+}
+
 void ecSuccCb(doca_ec_task_create *task, doca_data task_user_data,
               doca_data ctx_user_data) {
     ReplicaUserData *userData =
         static_cast<ReplicaUserData *>(task_user_data.ptr);
     ReplicaRscs &rscs = userData->rscs;
     uint32_t taskId = userData->taskId;
+    
+    // 注意：EC 完成后通常需要提交 Write 任务。
+    // 这里如果还没退出，继续提交；如果退出了，直接释放。
+    // 由于提交 Write 任务不是“完成整个流程”，我们需要特殊处理。
+    
     if (!gForceQuit) {
-        CHECK_LOG(doca_task_submit(
-                      doca_rdma_task_write_as_task(rscs.writeTasks[taskId])),
-                  "submit write task in cb");
+        doca_error_t res = doca_task_submit(
+            doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
+        if (res != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Submit write task failed: %s", doca_error_get_name(res));
+            handleTaskCompletion(userData, false); // 提交失败当做错误处理
+        }
     } else {
-        doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[taskId]));
-        doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
-        
-        // Return to queue even on quit to avoid deadlocks in destroy if needed
-        std::unique_lock<std::mutex> lock(rscs.taskMutex);
-        rscs.freeTaskIds.push(taskId);
-        rscs.taskCv.notify_one();
-        
-        rscs.nbFreedTasks++;
+        // 正在退出，不再提交下一阶段，直接销毁
+        handleTaskCompletion(userData, false); // false 会触发释放逻辑
     }
 }
+
 void ecErrCb(doca_ec_task_create *task, doca_data task_user_data,
              doca_data ctx_user_data) {
-    ReplicaUserData *userData =
-        static_cast<ReplicaUserData *>(task_user_data.ptr);
-    ReplicaRscs &rscs = userData->rscs;
-    uint32_t taskId = userData->taskId;
-    gForceQuit = true;
-    doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[taskId]));
-    doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
-    rscs.nbFreedTasks++;
-    DOCA_LOG_ERR("EC task failed");
+    ReplicaUserData *userData = static_cast<ReplicaUserData *>(task_user_data.ptr);
+    handleTaskCompletion(userData, false);
 }
 
 void WriteSuccCb(doca_rdma_task_write *task, doca_data task_user_data,
                  doca_data ctx_user_data) {
-    ReplicaUserData *userData =
-        static_cast<ReplicaUserData *>(task_user_data.ptr);
-    ReplicaRscs &rscs = userData->rscs;
-    uint32_t taskId = userData->taskId;
-    rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
+    ReplicaUserData *userData = static_cast<ReplicaUserData *>(task_user_data.ptr);
     
-    // Instead of resubmitting loop, we free the resource index
-    {
-        std::unique_lock<std::mutex> lock(rscs.taskMutex);
-        rscs.freeTaskIds.push(taskId);
-    }
-    rscs.taskCv.notify_one();
+    userData->rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
+    userData->rscs.nbFinishedTasks++; // 统计完成数
 
-    rscs.nbFinishedTasks++;
-    
-    CHECK_LOG(doca_buf_set_data_len(rscs.rdncBufs[taskId], 0), "reset rdnc len");
-    CHECK_LOG(doca_buf_set_data_len(rscs.clientBufs[taskId], 0), "reset client len");
-    
-    if (gForceQuit) {
-        doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[taskId]));
-        doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
-        rscs.nbFreedTasks++;
-    }
+    CHECK_LOG(doca_buf_set_data_len(userData->rscs.rdncBufs[userData->taskId], 0), "reset rdnc len");
+    CHECK_LOG(doca_buf_set_data_len(userData->rscs.clientBufs[userData->taskId], 0), "reset client len");
+
+    handleTaskCompletion(userData, true);
 }
 
 void WriteErrCb(doca_rdma_task_write *task, doca_data task_user_data,
                 doca_data ctx_user_data) {
-    ReplicaUserData *userData =
-        static_cast<ReplicaUserData *>(task_user_data.ptr);
-    ReplicaRscs &rscs = userData->rscs;
-    uint32_t taskId = userData->taskId;
-    gForceQuit = true;
-    doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[taskId]));
-    doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
-    rscs.nbFreedTasks++;
-    DOCA_LOG_ERR("Write task failed");
+    ReplicaUserData *userData = static_cast<ReplicaUserData *>(task_user_data.ptr);
+    handleTaskCompletion(userData, false);
 }
 
 static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
@@ -271,57 +277,48 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     auto t0 = std::chrono::high_resolution_clock::now();
 
-    // PE progress thread or interleaved in loop? 
-    // Since we need to sleep for timestamps, it's better to run PE progress in a separate thread or non-blocking in loop.
-    // For simplicity here, we assume a separate thread is handling PE or we call it when waiting.
-    // But since doca_pe_progress is usually single threaded per PE, we must call it.
-    // We will use a dedicated thread for PE progress in this design or interleave.
-    
-    // Let's spawn a helper for progress
     std::jthread progressThread([&](){
+        // 阶段 1: 处理 Trace
         while(!gForceQuit && (aRscs.nbFinishedTasks < aRscs.traces.size() || aRscs.traces.empty())) {
              doca_pe_progress(aRscs.pe);
-             // Yield to avoid burning CPU if we are just waiting for time
-             // std::this_thread::yield(); 
         }
-        // Cleanup phase progress
-        while(aRscs.nbFreedTasks < aCfg.nbTasks && gForceQuit) {
+        // 阶段 2: 清理阶段，必须等待所有任务资源释放完毕
+        while(aRscs.nbFreedTasks < aCfg.nbTasks) { // 移除 && gForceQuit，只要没释放完就一直转
              doca_pe_progress(aRscs.pe);
+             if (aRscs.nbFreedTasks >= aCfg.nbTasks) break;
+             // 可选：加个短暂 yield 防止空转占用 100% CPU
+             // std::this_thread::yield(); 
         }
     });
 
     for (const auto& rec : aRscs.traces) {
         if (gForceQuit) break;
 
-        // 1. Wait for timestamp
+        // [修改] 优化等待逻辑：能够响应 gForceQuit
         auto targetTime = t0 + std::chrono::microseconds(rec.timestamp);
-        std::this_thread::sleep_until(targetTime);
+        while (std::chrono::high_resolution_clock::now() < targetTime && !gForceQuit) {
+             std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        if (gForceQuit) break;
 
         // 2. Get free task
         uint32_t taskId;
         {
             std::unique_lock<std::mutex> lock(aRscs.taskMutex);
+            // [关键] wait 会在收到 notify_all 时被唤醒，此时检查 gForceQuit 并退出
             aRscs.taskCv.wait(lock, [&] { return !aRscs.freeTaskIds.empty() || gForceQuit; });
-            if(gForceQuit) break;
+            
+            if(gForceQuit) break; // 退出循环
+            
             taskId = aRscs.freeTaskIds.front();
             aRscs.freeTaskIds.pop();
         }
 
-        // 3. Configure Task based on Trace
-        // Ensure length doesn't exceed buffer limits
+        // ... (任务配置代码保持不变，省略中间部分) ...
         size_t maxDataLen = aCfg.blkSize * kNbDataBlks;
         size_t len = std::min((size_t)rec.length, maxDataLen);
-        
-        // EC requires specific alignment usually, but we assume trace is valid or we process what we can.
-        // Update local buffer data length (simulating reading 'len' bytes)
-        CHECK_LOG(doca_buf_set_data_len(aRscs.recvBufs[taskId], len), "set buf len from trace");
-
-        // Calculate expected redundancy size (simplified linear proportion)
-        // Note: Real EC requires padding if len is not aligned to kNbDataBlks
+        CHECK_LOG(doca_buf_set_data_len(aRscs.recvBufs[taskId], len), "set buf len");
         size_t rdncLen = (len + kNbDataBlks - 1) / kNbDataBlks * kNbRdncBlks;
-        
-        // Update Remote Buffer info to write to correct offset
-        // We reuse the existing doca_buf object but point it to new address
         void* clientBase = aRscs.clientBaseAddr;
         doca_buf_set_data(aRscs.clientBufs[taskId], static_cast<char*>(clientBase) + rec.offset, len + rdncLen);
 
@@ -330,13 +327,26 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         CHECK_LOG(doca_task_submit(doca_ec_task_create_as_task(aRscs.ecTasks[taskId])), "submit trace ec task");
     }
     
-    // Wait for all tasks to drain if needed
-    // The progress thread handles completion.
-    // Just wait until finished count matches trace size
+    // 等待正在运行的任务自然结束（或者被 Ctrl-C 标记）
     while(!gForceQuit && aRscs.nbFinishedTasks < aRscs.traces.size()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    gForceQuit = true; // Signal progress thread to stop
+    gForceQuit = true; 
+
+    // 手动释放所有空闲任务
+    {
+        std::unique_lock<std::mutex> lock(aRscs.taskMutex);
+        while (!aRscs.freeTaskIds.empty()) {
+            uint32_t taskId = aRscs.freeTaskIds.front();
+            aRscs.freeTaskIds.pop();
+
+            doca_task_free(doca_ec_task_create_as_task(aRscs.ecTasks[taskId]));
+            doca_task_free(doca_rdma_task_write_as_task(aRscs.writeTasks[taskId]));
+            
+            aRscs.nbFreedTasks++;
+        }
+    }
+    // 此时 nbFreedTasks 应该等于 nbTasks，progressThread 将自动退出
 }
 
 void destroy(ReplicaRscs &aRscs) {

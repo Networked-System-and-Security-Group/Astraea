@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <string>
+#include <atomic> 
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
@@ -86,7 +87,7 @@ struct alignas(64) ReplicaRscs {
     /* Thread metadata, should init by main thread */
     uint32_t threadId;
     uint32_t nbFinishedTasks;
-    uint32_t nbFreedTasks;
+    std::atomic<uint32_t> nbFreedTasks;
     uint16_t port;
     std::vector<std::chrono::high_resolution_clock::time_point> beginTimes;
     std::vector<std::chrono::high_resolution_clock::time_point> endTimes;

@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
                       .nbThreads = 1, // Default to 1 for trace replay simplicity
                       .nbTasks = 2,
                       .blkSize = 65536,
-                      .tracePath = "/home/wangfy26/Astraea/data/alibaba_data.csv"};
+                      .tracePath = "/home/wangfy26/Astraea/data/test_data.csv"};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
 
