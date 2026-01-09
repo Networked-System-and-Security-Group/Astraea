@@ -21,15 +21,20 @@
 
 DOCA_LOG_REGISTER(REPLICA:CLIENT : CORE);
 
-doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
-    CHECK_RETURN(openDev(aCfg.ibdevName, aRscs.dev), "open device");
+doca_error_t init(const ReplicaCfg &aCfg, const SharedRscs &shared, ReplicaRscs &aRscs) {
+    // 全局共享资源
+    aRscs.dev = shared.dev;     // 所有线程使用同一个 dev 句柄
+    aRscs.mmap = shared.mmap;   // 所有线程使用同一个 mmap 句柄
+    aRscs.memAddr = shared.memAddr;
+
     /* Server only need pe to built connection */
     CHECK_RETURN(doca_pe_create(&aRscs.pe), "create pe");
 
-    CHECK_RETURN(initMemory(8192, aRscs.dev, aCfg.mmapSize, aRscs.memAddr,
-                            aRscs.mmap, aRscs.bufInv),
-                 "init memory");
+    // 每个线程创建自己的 Inventory，指向共享内存
+    CHECK_RETURN(doca_buf_inventory_create(kTaskPoolSize, &aRscs.bufInv), "create buf inventory");
+    CHECK_RETURN(doca_buf_inventory_start(aRscs.bufInv), "start buf inventory");
 
+    // 在同一个 dev 上创建多个独立的 rdma 上下文
     CHECK_RETURN(initRdma(aCfg.gidIdx, aRscs.dev, aRscs.pe, nullptr, nullptr,
                           nullptr, nullptr, aRscs.rdma, aRscs.ctx),
                  "init rdma");
@@ -87,7 +92,13 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 
 void destroy(ReplicaRscs &aRscs) {
     destroyRdma(aRscs.rdma, aRscs.ctx);
-    destroyMemory(aRscs.memAddr, aRscs.mmap, aRscs.bufInv);
+    
+    if(aRscs.bufInv) {
+        doca_buf_inventory_destroy(aRscs.bufInv);
+        aRscs.bufInv = nullptr;
+    }
+
     CHECK_LOG(doca_pe_destroy(aRscs.pe), "destroy pe");
-    CHECK_LOG(doca_dev_close(aRscs.dev), "close dev");
+    
+    // 警告：千万不要在这里关闭 dev 或 mmap，它们属于主线程
 }

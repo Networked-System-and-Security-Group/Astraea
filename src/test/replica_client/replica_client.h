@@ -1,3 +1,5 @@
+#pragma once
+
 #include <cstddef>
 #include <cstdint>
 #include <doca_ctx.h>
@@ -19,18 +21,29 @@ constexpr size_t kDataSize = kBlkSize * kNbDataBlks;
 constexpr size_t kRdncSize = kBlkSize * kNbRdncBlks;
 constexpr size_t kSendSize = kDataSize + kRdncSize;
 
+// 共享资源结构体：包含设备句柄和内存
+struct SharedRscs {
+    doca_dev *dev;          // 全局唯一的设备句柄
+    doca_mmap *mmap;        // 全局唯一的注册内存
+    void *memAddr;
+    size_t memSize;
+};
+
 struct ReplicaRscs {
     doca_rdma *rdma;
     doca_ctx *ctx;
     doca_pe *pe;
-    doca_dev *dev;
     doca_rdma_connection *conn;
-
+    
+    // 指向共享资源的指针
+    doca_dev *dev;
     doca_mmap *mmap;
-    doca_buf_inventory *bufInv;
     void *memAddr;
+    
+    // 线程独立的 Inventory
+    doca_buf_inventory *bufInv;
 
-    /* Thread metadata, should init by main thread */
+    /* Thread metadata */
     uint32_t threadId;
     uint16_t port;
 };
@@ -42,5 +55,6 @@ struct ReplicaCfg {
     uint16_t nbThreads;
 };
 
-doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &oCtx);
+// init 使用 SharedRscs 初始化
+doca_error_t init(const ReplicaCfg &aCfg, const SharedRscs &shared, ReplicaRscs &oCtx);
 void destroy(ReplicaRscs &aCtx);
