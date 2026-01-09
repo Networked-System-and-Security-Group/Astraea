@@ -18,8 +18,8 @@
 #include <doca_erasure_coding.h>
 #include <doca_rdma.h>
 
-constexpr uint32_t kNbDataBlks = 128;
-constexpr uint32_t kNbRdncBlks = 32;
+constexpr uint32_t kNbDataBlks = 32;
+constexpr uint32_t kNbRdncBlks = 8;
 
 // Trace record structure
 struct TraceRecord {

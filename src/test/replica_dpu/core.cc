@@ -6,6 +6,7 @@
 #include <doca_rdma.h>
 
 #include "common.h"
+#include "doca_ctx.h"
 #include "doca_erasure_coding.h"
 #include "ec.h"
 #include "memory.h"
@@ -63,30 +64,24 @@ static void handleTaskCompletion(ReplicaUserData *userData, bool success) {
     ReplicaRscs &rscs = userData->rscs;
     uint32_t taskId = userData->taskId;
 
-    // 必须在锁内检查 gForceQuit，防止主线程刚清理完，这里又把任务放回去
     std::unique_lock<std::mutex> lock(rscs.taskMutex);
     
     if (!gForceQuit && success) {
-        // 正常运行且任务成功：放回队列供下次使用
         rscs.freeTaskIds.push(taskId);
-        rscs.taskCv.notify_all(); // 唤醒正在等待任务的主线程
+        rscs.taskCv.notify_all();
     } else {
-        // 正在退出 或 任务失败：直接释放资源
-        // 此时持有锁，确保主线程不会同时操作该 taskId (虽然主线程只操作队列)
-        // 但更重要的是，如果 gForceQuit 为 true，我们绝不把任务放回队列
-        
-        lock.unlock(); // 释放资源不需要持有锁，提前解锁减少竞争
+        lock.unlock(); // 提前解锁
 
-        if (!success) {
-            gForceQuit = true; // 发生错误强制退出
-            DOCA_LOG_ERR("Task failed, aborting...");
+        if (!success && !gForceQuit) {
+            gForceQuit = true;
+            DOCA_LOG_ERR("Task failed, initiating shutdown...");
         }
 
         doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[taskId]));
         doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
         rscs.nbFreedTasks++;
         
-        // [至关重要] 唤醒主线程！否则主线程可能卡在 taskCv.wait() 永远无法退出
+        // 唤醒主线程以便其退出等待
         rscs.taskCv.notify_all();
     }
 }
@@ -98,26 +93,24 @@ void ecSuccCb(doca_ec_task_create *task, doca_data task_user_data,
     ReplicaRscs &rscs = userData->rscs;
     uint32_t taskId = userData->taskId;
     
-    // 注意：EC 完成后通常需要提交 Write 任务。
-    // 这里如果还没退出，继续提交；如果退出了，直接释放。
-    // 由于提交 Write 任务不是“完成整个流程”，我们需要特殊处理。
-    
     if (!gForceQuit) {
+        // Submit write task
+        // 注意：这里不需要加 peMutex，因为回调本身是在 PE 上下文中运行的
         doca_error_t res = doca_task_submit(
             doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
         if (res != DOCA_SUCCESS) {
             DOCA_LOG_ERR("Submit write task failed: %s", doca_error_get_name(res));
-            handleTaskCompletion(userData, false); // 提交失败当做错误处理
+            handleTaskCompletion(userData, false);
         }
     } else {
-        // 正在退出，不再提交下一阶段，直接销毁
-        handleTaskCompletion(userData, false); // false 会触发释放逻辑
+        handleTaskCompletion(userData, false);
     }
 }
 
 void ecErrCb(doca_ec_task_create *task, doca_data task_user_data,
              doca_data ctx_user_data) {
     ReplicaUserData *userData = static_cast<ReplicaUserData *>(task_user_data.ptr);
+    DOCA_LOG_ERR("EC Task Error Callback triggered");
     handleTaskCompletion(userData, false);
 }
 
@@ -126,7 +119,7 @@ void WriteSuccCb(doca_rdma_task_write *task, doca_data task_user_data,
     ReplicaUserData *userData = static_cast<ReplicaUserData *>(task_user_data.ptr);
     
     userData->rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
-    userData->rscs.nbFinishedTasks++; // 统计完成数
+    userData->rscs.nbFinishedTasks++;
 
     CHECK_LOG(doca_buf_set_data_len(userData->rscs.rdncBufs[userData->taskId], 0), "reset rdnc len");
     CHECK_LOG(doca_buf_set_data_len(userData->rscs.clientBufs[userData->taskId], 0), "reset client len");
@@ -137,6 +130,7 @@ void WriteSuccCb(doca_rdma_task_write *task, doca_data task_user_data,
 void WriteErrCb(doca_rdma_task_write *task, doca_data task_user_data,
                 doca_data ctx_user_data) {
     ReplicaUserData *userData = static_cast<ReplicaUserData *>(task_user_data.ptr);
+    DOCA_LOG_ERR("Write Task Error Callback triggered");
     handleTaskCompletion(userData, false);
 }
 
@@ -150,7 +144,6 @@ static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         "get client memory addr");
     aRscs.clientBaseAddr = clientMemAddr;
 
-    // Use max possible size for buffer init to be safe, actual usage depends on trace
     size_t dataSize = aCfg.blkSize * kNbDataBlks;
     size_t rdncSize = aCfg.blkSize * kNbRdncBlks;
     size_t totalSize = dataSize + rdncSize;
@@ -180,9 +173,11 @@ static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
                      "get send buf by data");
         aRscs.sendBufs.push_back(sendBuf);
 
+        // [修改] 使用 clientMemAddrSize 而不是 totalSize
+        // 这样 clientBuf 可以覆盖整个客户端内存，允许写入任何偏移量
         CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
                          aRscs.bufInv, aRscs.clientMmap,
-                         clientMemAddr, totalSize, &clientBuf), // Point to base initially
+                         clientMemAddr, clientMemAddrSize, &clientBuf), 
                      "get client buf by addr");
         aRscs.clientBufs.push_back(clientBuf);
     }
@@ -191,23 +186,16 @@ static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 
 static void destroyBufs(ReplicaRscs &aRscs) {
     for (doca_buf *&clientBuf : aRscs.clientBufs) {
-        CHECK_LOG(doca_buf_dec_refcount(clientBuf, nullptr),
-                  "dec client buf ref cnt");
+        CHECK_LOG(doca_buf_dec_refcount(clientBuf, nullptr), "dec client buf ref cnt");
     }
-
     for (doca_buf *&recvBuf : aRscs.recvBufs) {
-        CHECK_LOG(doca_buf_dec_refcount(recvBuf, nullptr),
-                  "dec recv buf ref cnt");
+        CHECK_LOG(doca_buf_dec_refcount(recvBuf, nullptr), "dec recv buf ref cnt");
     }
-
     for (doca_buf *&rdncBuf : aRscs.rdncBufs) {
-        CHECK_LOG(doca_buf_dec_refcount(rdncBuf, nullptr),
-                  "dec rdnc buf ref cnt");
+        CHECK_LOG(doca_buf_dec_refcount(rdncBuf, nullptr), "dec rdnc buf ref cnt");
     }
-
     for (doca_buf *&sendBuf : aRscs.sendBufs) {
-        CHECK_LOG(doca_buf_dec_refcount(sendBuf, nullptr),
-                  "dec send buf ref cnt");
+        CHECK_LOG(doca_buf_dec_refcount(sendBuf, nullptr), "dec send buf ref cnt");
     }
 }
 
@@ -215,7 +203,7 @@ static doca_error_t initTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     for (uint32_t i = 0; i < aCfg.nbTasks; i++) {
         ReplicaUserData userData = {.rscs = aRscs, .taskId = i};
         aRscs.userDatas.push_back(userData);
-        aRscs.freeTaskIds.push(i); // Initial free tasks
+        aRscs.freeTaskIds.push(i); 
     }
 
     for (uint32_t i = 0; i < aCfg.nbTasks; i++) {
@@ -263,7 +251,6 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 
     DOCA_LOG_INFO("Thread %u connection established", aRscs.threadId);
     
-    // Load Trace
     if (strlen(aCfg.tracePath) > 0) {
         loadTrace(aCfg.tracePath, aRscs.traces);
     }
@@ -276,64 +263,116 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 
 void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     auto t0 = std::chrono::high_resolution_clock::now();
+    
+    uint64_t baseTimestamp = 0;
+    if (!aRscs.traces.empty()) {
+        baseTimestamp = aRscs.traces.front().timestamp;
+    }
 
     std::jthread progressThread([&](){
-        // 阶段 1: 处理 Trace
+        // Phase 1: Trace Progress
         while(!gForceQuit && (aRscs.nbFinishedTasks < aRscs.traces.size() || aRscs.traces.empty())) {
              doca_pe_progress(aRscs.pe);
         }
-        // 阶段 2: 清理阶段，必须等待所有任务资源释放完毕
-        while(aRscs.nbFreedTasks < aCfg.nbTasks) { // 移除 && gForceQuit，只要没释放完就一直转
+        
+        // Phase 2: Cleanup tasks
+        while(aRscs.nbFreedTasks < aCfg.nbTasks) {
              doca_pe_progress(aRscs.pe);
              if (aRscs.nbFreedTasks >= aCfg.nbTasks) break;
-             // 可选：加个短暂 yield 防止空转占用 100% CPU
-             // std::this_thread::yield(); 
+        }
+
+        // Phase 3: Graceful Shutdown
+        if (aRscs.ecCtx) doca_ctx_stop(aRscs.ecCtx);
+        doca_ctx_states state;
+        for(int i=0; i<5000; i++) {
+             doca_pe_progress(aRscs.pe);
+             doca_ctx_get_state(aRscs.ecCtx, &state);
+             if (state == DOCA_CTX_STATE_IDLE) break;
+             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
     });
 
     for (const auto& rec : aRscs.traces) {
         if (gForceQuit) break;
 
-        // [修改] 优化等待逻辑：能够响应 gForceQuit
-        auto targetTime = t0 + std::chrono::microseconds(rec.timestamp);
+        // 时间戳逻辑
+        uint64_t relativeTimeUs = 0;
+        if (rec.timestamp >= baseTimestamp) {
+            relativeTimeUs = rec.timestamp - baseTimestamp;
+        }
+        auto targetTime = t0 + std::chrono::microseconds(relativeTimeUs);
+        
         while (std::chrono::high_resolution_clock::now() < targetTime && !gForceQuit) {
              std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
         if (gForceQuit) break;
 
-        // 2. Get free task
+        // Get free task
         uint32_t taskId;
         {
             std::unique_lock<std::mutex> lock(aRscs.taskMutex);
-            // [关键] wait 会在收到 notify_all 时被唤醒，此时检查 gForceQuit 并退出
             aRscs.taskCv.wait(lock, [&] { return !aRscs.freeTaskIds.empty() || gForceQuit; });
-            
-            if(gForceQuit) break; // 退出循环
-            
+            if(gForceQuit) break;
             taskId = aRscs.freeTaskIds.front();
             aRscs.freeTaskIds.pop();
         }
 
-        // ... (任务配置代码保持不变，省略中间部分) ...
+        // =================================================================
+        // [关键修改] 数据对齐修复
+        // 硬件要求 BlockSize 必须是 64 字节对齐
+        // TotalLen = BlockSize * K
+        // 因此 TotalLen 必须是 (64 * K) 的倍数
+        // =================================================================
+        const size_t kEcBlockSizeAlignment = 64; 
+        size_t alignment = kNbDataBlks * kEcBlockSizeAlignment; // e.g. 128 * 64 = 8192
+        
+        // 向上取整对齐
+        size_t rawLen = rec.length;
+        size_t nbAlignedBlocks = (rawLen + alignment - 1) / alignment;
+        if (nbAlignedBlocks == 0) nbAlignedBlocks = 1; 
+        size_t len = nbAlignedBlocks * alignment;
+        
         size_t maxDataLen = aCfg.blkSize * kNbDataBlks;
-        size_t len = std::min((size_t)rec.length, maxDataLen);
+        if (len > maxDataLen) {
+            // 如果超出了最大缓冲区，必须向下截断到对齐边界，否则会 crash
+            len = (maxDataLen / alignment) * alignment;
+        }
+        
         CHECK_LOG(doca_buf_set_data_len(aRscs.recvBufs[taskId], len), "set buf len");
-        size_t rdncLen = (len + kNbDataBlks - 1) / kNbDataBlks * kNbRdncBlks;
-        void* clientBase = aRscs.clientBaseAddr;
-        doca_buf_set_data(aRscs.clientBufs[taskId], static_cast<char*>(clientBase) + rec.offset, len + rdncLen);
 
-        // 4. Submit Task
+        // Calculate Redundancy Size
+        // rdncLen = (len / K) * M. 由于 len 是 K*64 的倍数，这里一定是整数。
+        size_t rdncLen = (len / kNbDataBlks) * kNbRdncBlks;
+        size_t totalLen = len + rdncLen;
+        
+        // Offset logic
+        size_t offset = totalLen; 
+        
+        void* clientBase = aRscs.clientBaseAddr;
+        doca_buf_set_data(aRscs.clientBufs[taskId], static_cast<char*>(clientBase), totalLen);
+
+        // Submit Task
         aRscs.beginTimes.push_back(std::chrono::high_resolution_clock::now());
-        CHECK_LOG(doca_task_submit(doca_ec_task_create_as_task(aRscs.ecTasks[taskId])), "submit trace ec task");
+        
+        doca_error_t res = doca_task_submit(doca_ec_task_create_as_task(aRscs.ecTasks[taskId]));
+        if (res != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Submit failed: %s", doca_error_get_name(res));
+            {
+                std::unique_lock<std::mutex> tLock(aRscs.taskMutex);
+                aRscs.freeTaskIds.push(taskId);
+            }
+            gForceQuit = true;
+            break;
+        }
     }
     
-    // 等待正在运行的任务自然结束（或者被 Ctrl-C 标记）
+    // Wait for all tasks
     while(!gForceQuit && aRscs.nbFinishedTasks < aRscs.traces.size()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     gForceQuit = true; 
 
-    // 手动释放所有空闲任务
+    // Cleanup
     {
         std::unique_lock<std::mutex> lock(aRscs.taskMutex);
         while (!aRscs.freeTaskIds.empty()) {
@@ -346,7 +385,6 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
             aRscs.nbFreedTasks++;
         }
     }
-    // 此时 nbFreedTasks 应该等于 nbTasks，progressThread 将自动退出
 }
 
 void destroy(ReplicaRscs &aRscs) {

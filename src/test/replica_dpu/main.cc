@@ -169,7 +169,7 @@ int main(int argc, char **argv) {
                       .gidIdx = 1,
                       .hostIpAddr = "11.5.5.5",
                       .clientIpAddr = "192.168.200.1",
-                      .nbThreads = 1, // Default to 1 for trace replay simplicity
+                      .nbThreads = 1, 
                       .nbTasks = 2,
                       .blkSize = 65536,
                       .tracePath = "/home/wangfy26/Astraea/data/test_data.csv"};
@@ -217,6 +217,10 @@ int main(int argc, char **argv) {
 
     for (std::thread &thread : threads) {
         thread.join();
+    }
+
+    if (endTime.time_since_epoch().count() == 0) {
+        endTime = std::chrono::high_resolution_clock::now();
     }
     
     std::vector<std::vector<double>> allCosts;
