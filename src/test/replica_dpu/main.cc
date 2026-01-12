@@ -217,6 +217,11 @@ int main(int argc, char **argv) {
     for (std::thread &thread : threads) {
         thread.join();
     }
+
+    // [新增] 修复自然退出时时间未设置的问题
+    if (endTime.time_since_epoch().count() == 0) {
+        endTime = std::chrono::high_resolution_clock::now();
+    }
     
     std::vector<std::vector<double>> allCosts;
     for (const auto &rscsPtr : rscss) {

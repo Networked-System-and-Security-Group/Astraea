@@ -5,7 +5,6 @@
 #include <doca_ctx.h>
 #include <doca_dev.h>
 #include <doca_pe.h>
-#include <vector>
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>

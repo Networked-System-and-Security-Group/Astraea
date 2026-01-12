@@ -434,7 +434,7 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     while(!gForceQuit && aRscs.nbFinishedTasks < aRscs.traces.size()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    gForceQuit = true; 
+    gForceQuit = true;
 
     // Cleanup
     {
@@ -448,6 +448,14 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
             
             aRscs.nbFreedTasks++;
         }
+    }
+
+    for (u32 i = 0; i < aRscs.nbFinishedTasks; i++) {
+        double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              aRscs.endTimes[i] - aRscs.beginTimes[i])
+                              .count() /
+                          1000.0;
+        aRscs.timeCosts.push_back(timeCost);
     }
 }
 
