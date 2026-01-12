@@ -9,6 +9,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic> 
+#include <map>
+#include <utility>
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
@@ -17,8 +19,9 @@
 #include <doca_erasure_coding.h>
 #include <doca_rdma.h>
 
-constexpr uint32_t kNbDataBlks = 32;
-constexpr uint32_t kNbRdncBlks = 8;
+// 移除固定常量
+// constexpr uint32_t kNbDataBlks = 32;
+// constexpr uint32_t kNbRdncBlks = 8;
 
 // Trace record structure
 struct TraceRecord {
@@ -47,7 +50,10 @@ struct alignas(64) ReplicaRscs {
     /* EC resources */
     doca_ec *ec;
     doca_ctx *ecCtx;
-    doca_ec_matrix *mat;
+    doca_ec_matrix *mat; // Default/Max matrix
+
+    // Matrix Cache: Key=(K, M), Value=Matrix*
+    std::map<std::pair<uint32_t, uint32_t>, doca_ec_matrix*> matCache;
 
     /* Memory resources */
     doca_buf_inventory *bufInv;
@@ -77,6 +83,10 @@ struct alignas(64) ReplicaRscs {
 
     /* Trace Data */
     std::vector<TraceRecord> traces;
+    
+    // Max values for memory allocation
+    uint32_t maxNbDataBlks;
+    uint32_t maxNbRdncBlks;
 
     /* Concurrency Control for Trace Replay */
     std::queue<uint32_t> freeTaskIds;
@@ -91,6 +101,9 @@ struct alignas(64) ReplicaRscs {
     std::vector<std::chrono::high_resolution_clock::time_point> beginTimes;
     std::vector<std::chrono::high_resolution_clock::time_point> endTimes;
     std::vector<double> timeCosts;
+    
+    // Stats
+    uint64_t totalBytesProcessed;
 };
 
 struct alignas(64) ReplicaCfg {

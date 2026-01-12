@@ -170,7 +170,7 @@ int main(int argc, char **argv) {
                       .clientIpAddr = "192.168.200.1",
                       .nbThreads = 1, 
                       .nbTasks = 2,
-                      .blkSize = 1024,
+                      .blkSize = 2048,
                       .tracePath = "/home/wangfy26/Astraea/data/test_data.csv"};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
@@ -217,11 +217,6 @@ int main(int argc, char **argv) {
     for (std::thread &thread : threads) {
         thread.join();
     }
-
-    // ???
-    // if (endTime.time_since_epoch().count() == 0) {
-    //     endTime = std::chrono::high_resolution_clock::now();
-    // }
     
     std::vector<std::vector<double>> allCosts;
     for (const auto &rscsPtr : rscss) {
@@ -232,9 +227,10 @@ int main(int argc, char **argv) {
 
     double nbProcessedGBits = 0;
     uint32_t nbOps = 0;
+    
+    // 修改为使用 totalBytesProcessed 计算吞吐
     for (const auto &rscsPtr : rscss) {
-        nbProcessedGBits += static_cast<double>(rscsPtr->nbFinishedTasks) / 1e9 *
-                            kNbDataBlks * cfg.blkSize * 8;
+        nbProcessedGBits += static_cast<double>(rscsPtr->totalBytesProcessed) * 8.0 / 1e9;
         nbOps += rscsPtr->nbFinishedTasks;
     }
 

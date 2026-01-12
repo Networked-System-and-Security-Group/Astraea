@@ -140,8 +140,9 @@ static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         "get client memory addr");
     aRscs.clientBaseAddr = clientMemAddr;
 
-    size_t dataSize = aCfg.blkSize * kNbDataBlks;
-    size_t rdncSize = aCfg.blkSize * kNbRdncBlks;
+    // Use Max K and Max M for buffer allocation
+    size_t dataSize = aCfg.blkSize * aRscs.maxNbDataBlks;
+    size_t rdncSize = aCfg.blkSize * aRscs.maxNbRdncBlks;
     size_t totalSize = dataSize + rdncSize;
 
     char *localMemAddrInChar = static_cast<char *>(aRscs.localMemAddr);
@@ -169,8 +170,6 @@ static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
                      "get send buf by data");
         aRscs.sendBufs.push_back(sendBuf);
 
-        // [修改] 使用 clientMemAddrSize 而不是 totalSize
-        // 这样 clientBuf 可以覆盖整个客户端内存，允许写入任何偏移量
         CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
                          aRscs.bufInv, aRscs.clientMmap,
                          clientMemAddr, clientMemAddrSize, &clientBuf), 
@@ -204,6 +203,7 @@ static doca_error_t initTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 
     for (uint32_t i = 0; i < aCfg.nbTasks; i++) {
         doca_ec_task_create *ecTask;
+        // 使用默认/最大矩阵初始化
         CHECK_RETURN(doca_ec_task_create_allocate_init(
                          aRscs.ec, aRscs.mat, aRscs.recvBufs[i],
                          aRscs.rdncBufs[i], {.ptr = &aRscs.userDatas[i]},
@@ -226,13 +226,62 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     CHECK_RETURN(openDev(aCfg.ibdevName, aRscs.dev), "open device");
     CHECK_RETURN(doca_pe_create(&aRscs.pe), "create pe");
 
-    size_t mmapSize = aCfg.blkSize * (kNbDataBlks + kNbRdncBlks) * aCfg.nbTasks;
+    // 1. Load Trace first to calculate Max K and Max M
+    if (strlen(aCfg.tracePath) > 0) {
+        loadTrace(aCfg.tracePath, aRscs.traces);
+    }
+    
+    // 2. Scan trace for max length
+    uint32_t maxK = 1;
+    for (const auto& rec : aRscs.traces) {
+        uint32_t k = rec.length / aCfg.blkSize;
+        if (k > maxK) maxK = k;
+    }
+    
+    // [Hardware Limits]
+    // K <= 128
+    // M <= 32
+    constexpr uint32_t kHardMaxK = 128;
+    constexpr uint32_t kHardMaxM = 32;
+
+    if (maxK > kHardMaxK) {
+        DOCA_LOG_WARN("Trace MaxK=%u exceeds hardware limit %u. Clamping K to %u.", 
+                      maxK, kHardMaxK, kHardMaxK);
+        maxK = kHardMaxK;
+    }
+
+    // Default safe value
+    if (maxK < 32) maxK = 32; 
+    // Double check clamp
+    if (maxK > kHardMaxK) maxK = kHardMaxK;
+
+    aRscs.maxNbDataBlks = maxK;
+    
+    // Calculate M based on K (Ratio 2:1)
+    uint32_t maxM = (maxK + 1) / 2;
+    
+    // [Fix] Clamp M to hardware limit
+    if (maxM > kHardMaxM) {
+        DOCA_LOG_WARN("Calculated MaxM=%u exceeds hardware limit %u. Clamping M to %u.", 
+                      maxM, kHardMaxM, kHardMaxM);
+        maxM = kHardMaxM;
+    }
+
+    aRscs.maxNbRdncBlks = maxM;
+    aRscs.totalBytesProcessed = 0;
+
+    DOCA_LOG_INFO("Configured MaxK=%u, MaxM=%u based on trace.", 
+                  aRscs.maxNbDataBlks, aRscs.maxNbRdncBlks);
+
+    // 3. Alloc Memory with Max sizes
+    size_t mmapSize = aCfg.blkSize * (aRscs.maxNbDataBlks + aRscs.maxNbRdncBlks) * aCfg.nbTasks;
     CHECK_RETURN(initMemory(8192, aRscs.dev, mmapSize, aRscs.localMemAddr,
                             aRscs.localMmap, aRscs.bufInv),
                  "init memory");
 
     doca_ec_matrix *dummyMat = nullptr;
-    CHECK_RETURN(initEc(aRscs.dev, aRscs.pe, kNbDataBlks, kNbRdncBlks, nullptr,
+    // Init EC with max dimensions to set up context
+    CHECK_RETURN(initEc(aRscs.dev, aRscs.pe, aRscs.maxNbDataBlks, aRscs.maxNbRdncBlks, nullptr,
                         0, ecSuccCb, ecErrCb, nullptr, nullptr, aRscs.ec,
                         aRscs.mat, dummyMat, aRscs.ecCtx),
                  "init ec");
@@ -246,10 +295,6 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
                  "connect to client");
 
     DOCA_LOG_INFO("Thread %u connection established", aRscs.threadId);
-    
-    if (strlen(aCfg.tracePath) > 0) {
-        loadTrace(aCfg.tracePath, aRscs.traces);
-    }
 
     CHECK_RETURN(initBufs(aCfg, aRscs), "init bufs");
     CHECK_RETURN(initTasks(aCfg, aRscs), "init tasks");
@@ -314,38 +359,61 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         }
 
         // =================================================================
-        // [关键修改] 数据对齐修复
-        // 硬件要求 BlockSize 必须是 64 字节对齐
-        // TotalLen = BlockSize * K
-        // 因此 TotalLen 必须是 (64 * K) 的倍数
+        // Dynamic K & M Calculation
+        // K = length / blkSize
+        // M = K / 2 (Ratio 2:1)
         // =================================================================
-        const size_t kEcBlockSizeAlignment = 64; 
-        size_t alignment = kNbDataBlks * kEcBlockSizeAlignment; // e.g. 128 * 64 = 8192
+        uint32_t k = rec.length / aCfg.blkSize;
+        if (k == 0) k = 1; 
         
-        // 向上取整对齐
-        size_t rawLen = rec.length;
-        size_t nbAlignedBlocks = (rawLen + alignment - 1) / alignment;
-        if (nbAlignedBlocks == 0) nbAlignedBlocks = 1; 
-        size_t len = nbAlignedBlocks * alignment;
-        
-        size_t maxDataLen = aCfg.blkSize * kNbDataBlks;
-        if (len > maxDataLen) {
-            // 如果超出了最大缓冲区，必须向下截断到对齐边界，否则会 crash
-            len = (maxDataLen / alignment) * alignment;
+        // [Fix] Enforce hardware limit dynamically
+        if (k > aRscs.maxNbDataBlks) {
+             k = aRscs.maxNbDataBlks;
         }
-        
-        CHECK_LOG(doca_buf_set_data_len(aRscs.recvBufs[taskId], len), "set buf len");
 
-        // Calculate Redundancy Size
-        // rdncLen = (len / K) * M. 由于 len 是 K*64 的倍数，这里一定是整数。
-        size_t rdncLen = (len / kNbDataBlks) * kNbRdncBlks;
-        size_t totalLen = len + rdncLen;
+        uint32_t m = k / 2;
+        if (m == 0) m = 1; 
         
-        // Offset logic
-        size_t offset = totalLen; 
+        // [Fix] Enforce M limit
+        if (m > aRscs.maxNbRdncBlks) {
+             m = aRscs.maxNbRdncBlks;
+        }
+
+        // Matrix Selection
+        doca_ec_matrix *targetMat = nullptr;
+        std::pair<uint32_t, uint32_t> matKey = {k, m};
         
+        if (aRscs.matCache.find(matKey) != aRscs.matCache.end()) {
+            targetMat = aRscs.matCache[matKey];
+        } else {
+            // Create new matrix
+            doca_error_t res = doca_ec_matrix_create(aRscs.ec, DOCA_EC_MATRIX_TYPE_CAUCHY, 
+                                                     k, m, &targetMat);
+            if (res != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("Failed to create dynamic matrix K=%u M=%u: %s", 
+                             k, m, doca_error_get_name(res));
+                gForceQuit = true;
+                break;
+            }
+            aRscs.matCache[matKey] = targetMat;
+        }
+
+        // Update Task with new Matrix
+        doca_ec_task_create_set_coding_matrix(aRscs.ecTasks[taskId], targetMat);
+
+        // Update Buffers
+        size_t dataLen = k * aCfg.blkSize;
+        CHECK_LOG(doca_buf_set_data_len(aRscs.recvBufs[taskId], dataLen), "set data len");
+        
+        size_t rdncLen = m * aCfg.blkSize;
+        size_t totalLen = dataLen + rdncLen;
+        
+        // Setup Client Write Buffer
         void* clientBase = aRscs.clientBaseAddr;
         doca_buf_set_data(aRscs.clientBufs[taskId], static_cast<char*>(clientBase), totalLen);
+
+        // Stats accumulation
+        aRscs.totalBytesProcessed += dataLen;
 
         // Submit Task
         aRscs.beginTimes.push_back(std::chrono::high_resolution_clock::now());
@@ -384,6 +452,13 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 }
 
 void destroy(ReplicaRscs &aRscs) {
+    // Destroy cached matrices
+    for (auto const& [key, mat] : aRscs.matCache) {
+        if (mat && mat != aRscs.mat) {
+             doca_ec_matrix_destroy(mat);
+        }
+    }
+    
     destroyEc(aRscs.mat, nullptr, aRscs.ec, aRscs.ecCtx);
     destroyRdma(aRscs.rdma, aRscs.rdmaCtx);
     destroyBufs(aRscs);

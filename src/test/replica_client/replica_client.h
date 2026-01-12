@@ -14,7 +14,7 @@
 #include <doca_rdma.h>
 
 constexpr uint32_t kTaskPoolSize = 32;
-constexpr size_t kBlkSize = 1024;
+constexpr size_t kBlkSize = 2048;
 constexpr uint32_t kNbDataBlks = 32;
 constexpr uint32_t kNbRdncBlks = 8;
 constexpr size_t kDataSize = kBlkSize * kNbDataBlks;
