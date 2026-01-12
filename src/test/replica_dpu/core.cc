@@ -19,12 +19,10 @@
 #include <doca_log.h>
 #include <doca_mmap.h>
 #include <doca_pe.h>
-#include <signal.h>
 #include <thread>
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <iostream>
 
 DOCA_LOG_REGISTER(REPLICA:DPU : CORE);
 
@@ -94,8 +92,6 @@ void ecSuccCb(doca_ec_task_create *task, doca_data task_user_data,
     uint32_t taskId = userData->taskId;
     
     if (!gForceQuit) {
-        // Submit write task
-        // 注意：这里不需要加 peMutex，因为回调本身是在 PE 上下文中运行的
         doca_error_t res = doca_task_submit(
             doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
         if (res != DOCA_SUCCESS) {

@@ -16,7 +16,6 @@
 #include <doca_log.h>
 
 #include "common.h"
-#include "rdma.h"
 #include "replica_dpu.h"
 
 DOCA_LOG_REGISTER(REPLICA:DPU : MAIN);
@@ -171,7 +170,7 @@ int main(int argc, char **argv) {
                       .clientIpAddr = "192.168.200.1",
                       .nbThreads = 1, 
                       .nbTasks = 2,
-                      .blkSize = 65536,
+                      .blkSize = 1024,
                       .tracePath = "/home/wangfy26/Astraea/data/test_data.csv"};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
@@ -219,9 +218,10 @@ int main(int argc, char **argv) {
         thread.join();
     }
 
-    if (endTime.time_since_epoch().count() == 0) {
-        endTime = std::chrono::high_resolution_clock::now();
-    }
+    // ???
+    // if (endTime.time_since_epoch().count() == 0) {
+    //     endTime = std::chrono::high_resolution_clock::now();
+    // }
     
     std::vector<std::vector<double>> allCosts;
     for (const auto &rscsPtr : rscss) {
