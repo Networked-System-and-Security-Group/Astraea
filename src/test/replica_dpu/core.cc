@@ -23,6 +23,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <algorithm>
 
 DOCA_LOG_REGISTER(REPLICA:DPU : CORE);
 
@@ -37,16 +38,12 @@ static void loadTrace(const char* path, std::vector<TraceRecord>& traces) {
     }
 
     std::string line;
-    // Optional: skip header if exists
-    // std::getline(file, line); 
-
     while (std::getline(file, line)) {
         if (line.empty()) continue;
         std::stringstream ss(line);
         std::string val;
         TraceRecord rec;
         
-        // CSV: device_id,opcode,offset,length,timestamp
         std::getline(ss, val, ','); rec.device_id = std::stoul(val);
         std::getline(ss, val, ','); rec.opcode = val[0]; 
         std::getline(ss, val, ','); rec.offset = std::stoull(val);
@@ -68,7 +65,7 @@ static void handleTaskCompletion(ReplicaUserData *userData, bool success) {
         rscs.freeTaskIds.push(taskId);
         rscs.taskCv.notify_all();
     } else {
-        lock.unlock(); // 提前解锁
+        lock.unlock(); 
 
         if (!success && !gForceQuit) {
             gForceQuit = true;
@@ -79,7 +76,6 @@ static void handleTaskCompletion(ReplicaUserData *userData, bool success) {
         doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
         rscs.nbFreedTasks++;
         
-        // 唤醒主线程以便其退出等待
         rscs.taskCv.notify_all();
     }
 }
@@ -140,7 +136,6 @@ static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         "get client memory addr");
     aRscs.clientBaseAddr = clientMemAddr;
 
-    // Use Max K and Max M for buffer allocation
     size_t dataSize = aCfg.blkSize * aRscs.maxNbDataBlks;
     size_t rdncSize = aCfg.blkSize * aRscs.maxNbRdncBlks;
     size_t totalSize = dataSize + rdncSize;
@@ -203,7 +198,6 @@ static doca_error_t initTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 
     for (uint32_t i = 0; i < aCfg.nbTasks; i++) {
         doca_ec_task_create *ecTask;
-        // 使用默认/最大矩阵初始化
         CHECK_RETURN(doca_ec_task_create_allocate_init(
                          aRscs.ec, aRscs.mat, aRscs.recvBufs[i],
                          aRscs.rdncBufs[i], {.ptr = &aRscs.userDatas[i]},
@@ -226,21 +220,16 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     CHECK_RETURN(openDev(aCfg.ibdevName, aRscs.dev), "open device");
     CHECK_RETURN(doca_pe_create(&aRscs.pe), "create pe");
 
-    // 1. Load Trace first to calculate Max K and Max M
     if (strlen(aCfg.tracePath) > 0) {
         loadTrace(aCfg.tracePath, aRscs.traces);
     }
     
-    // 2. Scan trace for max length
     uint32_t maxK = 1;
     for (const auto& rec : aRscs.traces) {
         uint32_t k = rec.length / aCfg.blkSize;
         if (k > maxK) maxK = k;
     }
     
-    // [Hardware Limits]
-    // K <= 128
-    // M <= 32
     constexpr uint32_t kHardMaxK = 128;
     constexpr uint32_t kHardMaxM = 32;
 
@@ -250,17 +239,12 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         maxK = kHardMaxK;
     }
 
-    // Default safe value
     if (maxK < 32) maxK = 32; 
-    // Double check clamp
     if (maxK > kHardMaxK) maxK = kHardMaxK;
 
     aRscs.maxNbDataBlks = maxK;
     
-    // Calculate M based on K (Ratio 2:1)
     uint32_t maxM = (maxK + 1) / 2;
-    
-    // [Fix] Clamp M to hardware limit
     if (maxM > kHardMaxM) {
         DOCA_LOG_WARN("Calculated MaxM=%u exceeds hardware limit %u. Clamping M to %u.", 
                       maxM, kHardMaxM, kHardMaxM);
@@ -273,14 +257,12 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     DOCA_LOG_INFO("Configured MaxK=%u, MaxM=%u based on trace.", 
                   aRscs.maxNbDataBlks, aRscs.maxNbRdncBlks);
 
-    // 3. Alloc Memory with Max sizes
     size_t mmapSize = aCfg.blkSize * (aRscs.maxNbDataBlks + aRscs.maxNbRdncBlks) * aCfg.nbTasks;
     CHECK_RETURN(initMemory(8192, aRscs.dev, mmapSize, aRscs.localMemAddr,
                             aRscs.localMmap, aRscs.bufInv),
                  "init memory");
 
     doca_ec_matrix *dummyMat = nullptr;
-    // Init EC with max dimensions to set up context
     CHECK_RETURN(initEc(aRscs.dev, aRscs.pe, aRscs.maxNbDataBlks, aRscs.maxNbRdncBlks, nullptr,
                         0, ecSuccCb, ecErrCb, nullptr, nullptr, aRscs.ec,
                         aRscs.mat, dummyMat, aRscs.ecCtx),
@@ -317,26 +299,18 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         }
         
         // Phase 2: Cleanup tasks
+        // 主线程会在清理完所有 Task 后增加 nbFreedTasks，直到等于 nbTasks
+        // 此时我们才退出 Progress 循环，保证任务回调都能执行完毕
         while(aRscs.nbFreedTasks < aCfg.nbTasks) {
              doca_pe_progress(aRscs.pe);
              if (aRscs.nbFreedTasks >= aCfg.nbTasks) break;
         }
-
-        // Phase 3: Graceful Shutdown
-        if (aRscs.ecCtx) doca_ctx_stop(aRscs.ecCtx);
-        doca_ctx_states state;
-        for(int i=0; i<5000; i++) {
-             doca_pe_progress(aRscs.pe);
-             doca_ctx_get_state(aRscs.ecCtx, &state);
-             if (state == DOCA_CTX_STATE_IDLE) break;
-             std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
+        // [移除] Phase 3 Stop Logic: 不要在后台线程停止 Context
     });
 
     for (const auto& rec : aRscs.traces) {
         if (gForceQuit) break;
 
-        // 时间戳逻辑
         uint64_t relativeTimeUs = 0;
         if (rec.timestamp >= baseTimestamp) {
             relativeTimeUs = rec.timestamp - baseTimestamp;
@@ -348,7 +322,6 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         }
         if (gForceQuit) break;
 
-        // Get free task
         uint32_t taskId;
         {
             std::unique_lock<std::mutex> lock(aRscs.taskMutex);
@@ -358,35 +331,20 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
             aRscs.freeTaskIds.pop();
         }
 
-        // =================================================================
-        // Dynamic K & M Calculation
-        // K = length / blkSize
-        // M = K / 2 (Ratio 2:1)
-        // =================================================================
         uint32_t k = rec.length / aCfg.blkSize;
         if (k == 0) k = 1; 
-        
-        // [Fix] Enforce hardware limit dynamically
-        if (k > aRscs.maxNbDataBlks) {
-             k = aRscs.maxNbDataBlks;
-        }
+        if (k > aRscs.maxNbDataBlks) k = aRscs.maxNbDataBlks;
 
         uint32_t m = k / 2;
         if (m == 0) m = 1; 
-        
-        // [Fix] Enforce M limit
-        if (m > aRscs.maxNbRdncBlks) {
-             m = aRscs.maxNbRdncBlks;
-        }
+        if (m > aRscs.maxNbRdncBlks) m = aRscs.maxNbRdncBlks;
 
-        // Matrix Selection
         doca_ec_matrix *targetMat = nullptr;
         std::pair<uint32_t, uint32_t> matKey = {k, m};
         
         if (aRscs.matCache.find(matKey) != aRscs.matCache.end()) {
             targetMat = aRscs.matCache[matKey];
         } else {
-            // Create new matrix
             doca_error_t res = doca_ec_matrix_create(aRscs.ec, DOCA_EC_MATRIX_TYPE_CAUCHY, 
                                                      k, m, &targetMat);
             if (res != DOCA_SUCCESS) {
@@ -398,24 +356,18 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
             aRscs.matCache[matKey] = targetMat;
         }
 
-        // Update Task with new Matrix
         doca_ec_task_create_set_coding_matrix(aRscs.ecTasks[taskId], targetMat);
 
-        // Update Buffers
         size_t dataLen = k * aCfg.blkSize;
         CHECK_LOG(doca_buf_set_data_len(aRscs.recvBufs[taskId], dataLen), "set data len");
         
         size_t rdncLen = m * aCfg.blkSize;
         size_t totalLen = dataLen + rdncLen;
         
-        // Setup Client Write Buffer
         void* clientBase = aRscs.clientBaseAddr;
         doca_buf_set_data(aRscs.clientBufs[taskId], static_cast<char*>(clientBase), totalLen);
 
-        // Stats accumulation
         aRscs.totalBytesProcessed += dataLen;
-
-        // Submit Task
         aRscs.beginTimes.push_back(std::chrono::high_resolution_clock::now());
         
         doca_error_t res = doca_task_submit(doca_ec_task_create_as_task(aRscs.ecTasks[taskId]));
@@ -430,13 +382,12 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         }
     }
     
-    // Wait for all tasks
     while(!gForceQuit && aRscs.nbFinishedTasks < aRscs.traces.size()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    gForceQuit = true;
+    gForceQuit = true; 
 
-    // Cleanup
+    // Cleanup: 释放 Task，此时会增加 nbFreedTasks，让 progressThread 退出循环
     {
         std::unique_lock<std::mutex> lock(aRscs.taskMutex);
         while (!aRscs.freeTaskIds.empty()) {
@@ -450,6 +401,20 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         }
     }
 
+    // 此时 progressThread 应该已经 join（jthread 特性），我们现在是单线程环境，安全。
+
+    // 时间统计
+    // size_t validCount = std::min((size_t)aRscs.nbFinishedTasks, aRscs.endTimes.size());
+    // validCount = std::min(validCount, aRscs.beginTimes.size());
+
+    // for (uint32_t i = 0; i < validCount; i++) {
+    //     double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    //                           aRscs.endTimes[i] - aRscs.beginTimes[i])
+    //                           .count() /
+    //                       1000.0; 
+    //     aRscs.timeCosts.push_back(timeCost);
+    // }
+
     for (u32 i = 0; i < aRscs.nbFinishedTasks; i++) {
         double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
                               aRscs.endTimes[i] - aRscs.beginTimes[i])
@@ -460,18 +425,51 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 }
 
 void destroy(ReplicaRscs &aRscs) {
-    // Destroy cached matrices
+    // 1. 手动停止 Context 并等待 IDLE
+    if (aRscs.ecCtx) {
+        doca_ctx_states state;
+        doca_ctx_get_state(aRscs.ecCtx, &state);
+        
+        if (state != DOCA_CTX_STATE_IDLE) {
+            doca_error_t res = doca_ctx_stop(aRscs.ecCtx);
+            if (res == DOCA_SUCCESS || res == DOCA_ERROR_IN_PROGRESS) {
+                auto start = std::chrono::steady_clock::now();
+                // 在主线程中 Pump Progress 直到 Context 彻底停止
+                while (true) {
+                    doca_pe_progress(aRscs.pe);
+                    doca_ctx_get_state(aRscs.ecCtx, &state);
+                    if (state == DOCA_CTX_STATE_IDLE) break;
+                    
+                    if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
+                        DOCA_LOG_ERR("Timed out waiting for EC context to stop");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 销毁动态创建的矩阵
     for (auto const& [key, mat] : aRscs.matCache) {
         if (mat && mat != aRscs.mat) {
              doca_ec_matrix_destroy(mat);
         }
     }
-    
-    destroyEc(aRscs.mat, nullptr, aRscs.ec, aRscs.ecCtx);
+    // 3. 销毁默认矩阵 (initEc 中创建的)
+    if (aRscs.mat) {
+        doca_ec_matrix_destroy(aRscs.mat);
+    }
+
+    // 4. 销毁 EC 对象 (此时 Context 必须是 IDLE)
+    if (aRscs.ec) {
+        doca_ec_destroy(aRscs.ec);
+    }
+
+    // 5. 销毁其他资源
     destroyRdma(aRscs.rdma, aRscs.rdmaCtx);
     destroyBufs(aRscs);
-    CHECK_LOG(doca_mmap_destroy(aRscs.clientMmap), "destroy client mmap");
+    if(aRscs.clientMmap) doca_mmap_destroy(aRscs.clientMmap);
     destroyMemory(aRscs.localMemAddr, aRscs.localMmap, aRscs.bufInv);
-    CHECK_LOG(doca_pe_destroy(aRscs.pe), "destroy pe");
-    CHECK_LOG(doca_dev_close(aRscs.dev), "close dev");
+    if(aRscs.pe) doca_pe_destroy(aRscs.pe);
+    if(aRscs.dev) doca_dev_close(aRscs.dev);
 }
