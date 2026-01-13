@@ -246,8 +246,8 @@ int main(int argc, char **argv) {
         1e9;
     const double gbps = nbProcessedGBits / timeCost;
     const double ops = nbOps / timeCost;
-    DOCA_LOG_INFO("Processed %.0fGb in %fs, throughput is %.2fGbps, ops is %f",
-                  nbProcessedGBits, timeCost, gbps, ops);
+    DOCA_LOG_INFO("Processed %.4fGb in %fs, throughput is %.4fGbps, ops is %f",
+                    nbProcessedGBits, timeCost, gbps, ops);
 
     return 0;
 }

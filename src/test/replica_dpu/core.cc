@@ -23,7 +23,6 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <algorithm>
 
 DOCA_LOG_REGISTER(REPLICA:DPU : CORE);
 
@@ -72,10 +71,9 @@ static void handleTaskCompletion(ReplicaUserData *userData, bool success) {
             DOCA_LOG_ERR("Task failed, initiating shutdown...");
         }
 
-        doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[taskId]));
-        doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[taskId]));
+        // 异常退出时不在此处释放 Task，统一由 destroy 处理
+        // 只增加计数以唤醒主线程
         rscs.nbFreedTasks++;
-        
         rscs.taskCv.notify_all();
     }
 }
@@ -300,12 +298,10 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         
         // Phase 2: Cleanup tasks
         // 主线程会在清理完所有 Task 后增加 nbFreedTasks，直到等于 nbTasks
-        // 此时我们才退出 Progress 循环，保证任务回调都能执行完毕
-        while(aRscs.nbFreedTasks < aCfg.nbTasks) {
+        // 增加 !gForceQuit 检查，防止 Ctrl-C 后这里死循环
+        while(aRscs.nbFreedTasks < aCfg.nbTasks && !gForceQuit) {
              doca_pe_progress(aRscs.pe);
-             if (aRscs.nbFreedTasks >= aCfg.nbTasks) break;
         }
-        // [移除] Phase 3 Stop Logic: 不要在后台线程停止 Context
     });
 
     for (const auto& rec : aRscs.traces) {
@@ -387,34 +383,28 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     }
     gForceQuit = true; 
 
-    // Cleanup: 释放 Task，此时会增加 nbFreedTasks，让 progressThread 退出循环
+    // Cleanup: 释放空闲任务
+    // [重要] 释放后将指针置为 nullptr，防止 double free
     {
         std::unique_lock<std::mutex> lock(aRscs.taskMutex);
         while (!aRscs.freeTaskIds.empty()) {
             uint32_t taskId = aRscs.freeTaskIds.front();
             aRscs.freeTaskIds.pop();
 
-            doca_task_free(doca_ec_task_create_as_task(aRscs.ecTasks[taskId]));
-            doca_task_free(doca_rdma_task_write_as_task(aRscs.writeTasks[taskId]));
+            if (aRscs.ecTasks[taskId]) {
+                doca_task_free(doca_ec_task_create_as_task(aRscs.ecTasks[taskId]));
+                aRscs.ecTasks[taskId] = nullptr; 
+            }
+            if (aRscs.writeTasks[taskId]) {
+                doca_task_free(doca_rdma_task_write_as_task(aRscs.writeTasks[taskId]));
+                aRscs.writeTasks[taskId] = nullptr;
+            }
             
             aRscs.nbFreedTasks++;
         }
     }
-
-    // 此时 progressThread 应该已经 join（jthread 特性），我们现在是单线程环境，安全。
-
-    // 时间统计
-    // size_t validCount = std::min((size_t)aRscs.nbFinishedTasks, aRscs.endTimes.size());
-    // validCount = std::min(validCount, aRscs.beginTimes.size());
-
-    // for (uint32_t i = 0; i < validCount; i++) {
-    //     double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
-    //                           aRscs.endTimes[i] - aRscs.beginTimes[i])
-    //                           .count() /
-    //                       1000.0; 
-    //     aRscs.timeCosts.push_back(timeCost);
-    // }
-
+    
+    // [您要求保留的代码]
     for (u32 i = 0; i < aRscs.nbFinishedTasks; i++) {
         double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
                               aRscs.endTimes[i] - aRscs.beginTimes[i])
@@ -425,51 +415,70 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 }
 
 void destroy(ReplicaRscs &aRscs) {
-    // 1. 手动停止 Context 并等待 IDLE
-    if (aRscs.ecCtx) {
-        doca_ctx_states state;
-        doca_ctx_get_state(aRscs.ecCtx, &state);
+    // 1. 停止两个上下文
+    if (aRscs.ecCtx) doca_ctx_stop(aRscs.ecCtx);
+    if (aRscs.rdmaCtx) doca_ctx_stop(aRscs.rdmaCtx);
+
+    // 2. 轮询直到 IDLE
+    auto start = std::chrono::steady_clock::now();
+    while (true) {
+        bool ecIdle = true;
+        bool rdmaIdle = true;
         
-        if (state != DOCA_CTX_STATE_IDLE) {
-            doca_error_t res = doca_ctx_stop(aRscs.ecCtx);
-            if (res == DOCA_SUCCESS || res == DOCA_ERROR_IN_PROGRESS) {
-                auto start = std::chrono::steady_clock::now();
-                // 在主线程中 Pump Progress 直到 Context 彻底停止
-                while (true) {
-                    doca_pe_progress(aRscs.pe);
-                    doca_ctx_get_state(aRscs.ecCtx, &state);
-                    if (state == DOCA_CTX_STATE_IDLE) break;
-                    
-                    if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
-                        DOCA_LOG_ERR("Timed out waiting for EC context to stop");
-                        break;
-                    }
-                }
-            }
+        if (aRscs.ecCtx) {
+            doca_ctx_states s;
+            doca_ctx_get_state(aRscs.ecCtx, &s);
+            if (s != DOCA_CTX_STATE_IDLE) ecIdle = false;
         }
+        if (aRscs.rdmaCtx) {
+            doca_ctx_states s;
+            doca_ctx_get_state(aRscs.rdmaCtx, &s);
+            if (s != DOCA_CTX_STATE_IDLE) rdmaIdle = false;
+        }
+
+        if (ecIdle && rdmaIdle) break;
+
+        doca_pe_progress(aRscs.pe);
+
+        if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
+            DOCA_LOG_ERR("Timeout waiting for contexts to stop. Proceeding force destroy...");
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
 
-    // 2. 销毁动态创建的矩阵
+    // 3. [兜底释放] 释放所有未被 Cleanup 循环释放的任务（例如 Ctrl-C 时的 Inflight 任务）
+    // 由于我们在 runTasks 里释放后置了 nullptr，这里检查非空再释放是安全的
+    for (auto* task : aRscs.ecTasks) {
+        if (task) doca_task_free(doca_ec_task_create_as_task(task));
+    }
+    for (auto* task : aRscs.writeTasks) {
+        if (task) doca_task_free(doca_rdma_task_write_as_task(task));
+    }
+    aRscs.ecTasks.clear();
+    aRscs.writeTasks.clear();
+
+    // 4. 销毁动态创建的矩阵
     for (auto const& [key, mat] : aRscs.matCache) {
         if (mat && mat != aRscs.mat) {
              doca_ec_matrix_destroy(mat);
         }
     }
-    // 3. 销毁默认矩阵 (initEc 中创建的)
-    if (aRscs.mat) {
-        doca_ec_matrix_destroy(aRscs.mat);
-    }
+    // 5. 销毁默认矩阵
+    if (aRscs.mat) doca_ec_matrix_destroy(aRscs.mat);
 
-    // 4. 销毁 EC 对象 (此时 Context 必须是 IDLE)
-    if (aRscs.ec) {
-        doca_ec_destroy(aRscs.ec);
-    }
+    // 6. 销毁 EC 对象
+    if (aRscs.ec) doca_ec_destroy(aRscs.ec);
 
-    // 5. 销毁其他资源
-    destroyRdma(aRscs.rdma, aRscs.rdmaCtx);
+    // 7. 手动销毁 RDMA 对象
+    if (aRscs.rdma) doca_rdma_destroy(aRscs.rdma);
+
+    // 8. 销毁其他资源
     destroyBufs(aRscs);
     if(aRscs.clientMmap) doca_mmap_destroy(aRscs.clientMmap);
     destroyMemory(aRscs.localMemAddr, aRscs.localMmap, aRscs.bufInv);
+    
+    // 9. 最后销毁 PE
     if(aRscs.pe) doca_pe_destroy(aRscs.pe);
     if(aRscs.dev) doca_dev_close(aRscs.dev);
 }
