@@ -11,10 +11,8 @@
 #include <doca_log.h>
 #include <doca_mmap.h>
 #include <doca_pe.h>
-#include <vector>
 
 #include "common.h"
-#include "memory.h"
 #include "rdma.h"
 #include "replica_client.h"
 #include "socket.h"
@@ -100,5 +98,4 @@ void destroy(ReplicaRscs &aRscs) {
 
     CHECK_LOG(doca_pe_destroy(aRscs.pe), "destroy pe");
     
-    // 警告：千万不要在这里关闭 dev 或 mmap，它们属于主线程
 }
