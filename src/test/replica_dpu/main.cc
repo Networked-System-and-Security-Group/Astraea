@@ -21,7 +21,6 @@
 DOCA_LOG_REGISTER(REPLICA:DPU : MAIN);
 
 bool gCanStart = false;
-/* Not treating gForceQuit as atomic doesn't matter a lot */
 bool gForceQuit = false;
 
 using TimePoint = std::chrono::high_resolution_clock::time_point;
@@ -218,7 +217,7 @@ int main(int argc, char **argv) {
         thread.join();
     }
 
-    // [新增] 修复自然退出时时间未设置的问题
+    // 非 Ctrl C 退出
     if (endTime.time_since_epoch().count() == 0) {
         endTime = std::chrono::high_resolution_clock::now();
     }
@@ -233,7 +232,6 @@ int main(int argc, char **argv) {
     double nbProcessedGBits = 0;
     uint32_t nbOps = 0;
     
-    // 修改为使用 totalBytesProcessed 计算吞吐
     for (const auto &rscsPtr : rscss) {
         nbProcessedGBits += static_cast<double>(rscsPtr->totalBytesProcessed) * 8.0 / 1e9;
         nbOps += rscsPtr->nbFinishedTasks;

@@ -71,8 +71,7 @@ static void handleTaskCompletion(ReplicaUserData *userData, bool success) {
             DOCA_LOG_ERR("Task failed, initiating shutdown...");
         }
 
-        // 异常退出时不在此处释放 Task，统一由 destroy 处理
-        // 只增加计数以唤醒主线程
+        // 异常退出时不在此处释放 Task，统一由 destroy 处理，只增加计数以唤醒主线程
         rscs.nbFreedTasks++;
         rscs.taskCv.notify_all();
     }
@@ -232,20 +231,19 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     constexpr uint32_t kHardMaxM = 32;
 
     if (maxK > kHardMaxK) {
-        DOCA_LOG_WARN("Trace MaxK=%u exceeds hardware limit %u. Clamping K to %u.", 
-                      maxK, kHardMaxK, kHardMaxK);
+        // DOCA_LOG_WARN("Trace MaxK=%u exceeds hardware limit %u. Clamping K to %u.", 
+        //               maxK, kHardMaxK, kHardMaxK);
         maxK = kHardMaxK;
     }
 
     if (maxK < 32) maxK = 32; 
-    if (maxK > kHardMaxK) maxK = kHardMaxK;
 
     aRscs.maxNbDataBlks = maxK;
     
     uint32_t maxM = (maxK + 1) / 2;
     if (maxM > kHardMaxM) {
-        DOCA_LOG_WARN("Calculated MaxM=%u exceeds hardware limit %u. Clamping M to %u.", 
-                      maxM, kHardMaxM, kHardMaxM);
+        // DOCA_LOG_WARN("Calculated MaxM=%u exceeds hardware limit %u. Clamping M to %u.", 
+        //               maxM, kHardMaxM, kHardMaxM);
         maxM = kHardMaxM;
     }
 
@@ -297,8 +295,6 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         }
         
         // Phase 2: Cleanup tasks
-        // 主线程会在清理完所有 Task 后增加 nbFreedTasks，直到等于 nbTasks
-        // 增加 !gForceQuit 检查，防止 Ctrl-C 后这里死循环
         while(aRscs.nbFreedTasks < aCfg.nbTasks && !gForceQuit) {
              doca_pe_progress(aRscs.pe);
         }
@@ -317,6 +313,8 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
              std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
         if (gForceQuit) break;
+
+        DOCA_LOG_INFO("FUCK1");
 
         uint32_t taskId;
         {
@@ -383,8 +381,7 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
     }
     gForceQuit = true; 
 
-    // Cleanup: 释放空闲任务
-    // [重要] 释放后将指针置为 nullptr，防止 double free
+    // Cleanup: 释放空闲任务，释放后将指针置为 nullptr，防止 double free
     {
         std::unique_lock<std::mutex> lock(aRscs.taskMutex);
         while (!aRscs.freeTaskIds.empty()) {
@@ -404,17 +401,18 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
         }
     }
     
-    // [您要求保留的代码]
     for (u32 i = 0; i < aRscs.nbFinishedTasks; i++) {
         double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
                               aRscs.endTimes[i] - aRscs.beginTimes[i])
                               .count() /
                           1000.0;
         aRscs.timeCosts.push_back(timeCost);
+        DOCA_LOG_INFO("%lf", timeCost);
     }
 }
 
 void destroy(ReplicaRscs &aRscs) {
+
     // 1. 停止两个上下文
     if (aRscs.ecCtx) doca_ctx_stop(aRscs.ecCtx);
     if (aRscs.rdmaCtx) doca_ctx_stop(aRscs.rdmaCtx);
@@ -447,8 +445,7 @@ void destroy(ReplicaRscs &aRscs) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
 
-    // 3. [兜底释放] 释放所有未被 Cleanup 循环释放的任务（例如 Ctrl-C 时的 Inflight 任务）
-    // 由于我们在 runTasks 里释放后置了 nullptr，这里检查非空再释放是安全的
+    // 3. 释放所有未被 Cleanup 循环释放的任务
     for (auto* task : aRscs.ecTasks) {
         if (task) doca_task_free(doca_ec_task_create_as_task(task));
     }
