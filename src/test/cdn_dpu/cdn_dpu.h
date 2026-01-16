@@ -12,8 +12,12 @@
 #include <cstdint>
 #include <vector>
 
-constexpr uint32_t kNbDataBlks = 128;
-constexpr uint32_t kNbRdncBlks = 32;
+using u32 = uint32_t;
+
+constexpr u32 kNbDataBlks = 128;
+constexpr u32 kNbRdncBlks = 32;
+constexpr size_t kMaxChunkSize = 128 * 1024 * 1024;
+constexpr u32 kMaxNbChunks = 8;  // 1G / 128M = 8
 
 struct alignas(64) CdnRscs;
 struct alignas(64) CdnCfg;
@@ -21,9 +25,26 @@ struct alignas(64) CdnCfg;
 struct alignas(64) CdnUserData {
     CdnRscs &rscs;
     const CdnCfg &cfg;
-    uint32_t taskId;
-    uint32_t chunk_id;
-    uint32_t nb_chunks;
+    u32 taskId;
+    size_t requestSize;
+    u32 chunkId;
+    u32 nbChunks;
+};
+
+struct TaskPack {
+    CdnUserData userData;
+
+    // Bufs
+    std::vector<doca_buf *> dataBufs;
+    std::vector<doca_buf *> rdncBufs;
+    std::vector<doca_buf *> sendBufs;
+    std::vector<doca_buf *> clientBufs;
+
+    // Tasks
+    doca_rdma_task_receive *recvTasks;
+    // Each ec task and write task is for a certain chunk
+    std::vector<doca_ec_task_recover *> ecTasks;
+    std::vector<doca_rdma_task_write *> writeTasks;
 };
 
 struct alignas(64) CdnRscs {
@@ -45,42 +66,33 @@ struct alignas(64) CdnRscs {
     /* Local memory */
     doca_mmap *localMmap;
     void *localMemAddr;
-    std::vector<doca_buf *> recvBufs;
-    std::vector<doca_buf *> sendBufs;
-
-    /* Host memory */
-    doca_mmap *hostMmap;
-    std::vector<doca_buf *> hostBufs;
+    // std::vector<doca_buf *> recvBufs;
+    // std::vector<doca_buf *> sendBufs;
 
     /* Client memory */
     doca_mmap *clientMmap;
-    std::vector<doca_buf *> clientBufs;
+    // std::vector<doca_buf *> clientBufs;
 
     /* Task resources */
-    /* Read Tasks */
-    std::vector<CdnUserData> userDatas;
-    std::vector<doca_rdma_task_receive *> recvTasks;
-    std::vector<doca_rdma_task_write *> writeTasks;
-    std::vector<doca_ec_task_recover *> ecTasks;
+    std::vector<TaskPack> packs;
 
     /* Thread metadata, should init by main thread */
-    uint32_t threadId;
-    uint32_t nbFinishedTasks;
-    uint32_t nbFreedTasks;
+    u32 threadId;
+    // u32 nbFinishedTasks;
+    u32 nbFreedTasks;
     uint16_t port;
     std::vector<std::chrono::high_resolution_clock::time_point> beginTimes;
     std::vector<std::chrono::high_resolution_clock::time_point> endTimes;
     std::vector<double> timeCosts;
+    std::vector<size_t> sizes;
 };
 
 struct alignas(64) CdnCfg {
     char ibdevName[1024];
-    uint32_t gidIdx;
-    char hostIpAddr[1024];
+    u32 gidIdx;
     char clientIpAddr[1024];
     uint16_t nbThreads;
-    uint32_t nbTasks;
-    size_t blkSize;
+    u32 nbPipelineStages;
 };
 
 doca_error_t init(const CdnCfg &aCfg, CdnRscs &oCtx);

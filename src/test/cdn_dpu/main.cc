@@ -83,25 +83,15 @@ static doca_error_t ibdevNameCb(void *aIbdevName, void *aCfg) {
     return DOCA_SUCCESS;
 }
 
-static doca_error_t serverIpAddrCb(void *aServerIpAddr, void *aCfg) {
-    size_t ipAddrLen = strlen(static_cast<char *>(aServerIpAddr));
-    memcpy(static_cast<CdnCfg *>(aCfg)->hostIpAddr, aServerIpAddr, ipAddrLen);
-    return DOCA_SUCCESS;
-}
-
 static doca_error_t nbThreadsCb(void *aNbThreads, void *aCfg) {
     static_cast<CdnCfg *>(aCfg)->nbThreads =
         *static_cast<uint16_t *>(aNbThreads);
     return DOCA_SUCCESS;
 }
 
-static doca_error_t nbTasksCb(void *aNbTasks, void *aCfg) {
-    static_cast<CdnCfg *>(aCfg)->nbTasks = *static_cast<uint16_t *>(aNbTasks);
-    return DOCA_SUCCESS;
-}
-
-doca_error_t blkSzCb(void *aBlkSz, void *aCfg) {
-    static_cast<CdnCfg *>(aCfg)->blkSize = *static_cast<size_t *>(aBlkSz);
+static doca_error_t nbPipelineStagesCb(void *aNbPipelineStages, void *aCfg) {
+    static_cast<CdnCfg *>(aCfg)->nbPipelineStages =
+        *static_cast<uint16_t *>(aNbPipelineStages);
     return DOCA_SUCCESS;
 }
 
@@ -110,19 +100,12 @@ static doca_error_t registerParams(CdnCfg &cfg) {
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name cb");
 
-    CHECK_RETURN(registerOneParam("s", "server ip", DOCA_ARGP_TYPE_STRING,
-                                  serverIpAddrCb),
-                 "register server ip address cb");
-
     CHECK_RETURN(registerOneParam("nth", "number of threads",
                                   DOCA_ARGP_TYPE_INT, nbThreadsCb),
                  "register threads number cb");
     CHECK_RETURN(registerOneParam("ntk", "number of tasks", DOCA_ARGP_TYPE_INT,
-                                  nbTasksCb),
+                                  nbPipelineStagesCb),
                  "register task number cb");
-    CHECK_RETURN(
-        registerOneParam("bs", "block size", DOCA_ARGP_TYPE_INT, blkSzCb),
-        "register block size cb");
     return DOCA_SUCCESS;
 }
 
@@ -151,12 +134,10 @@ int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
     CdnCfg cfg = {.ibdevName = "mlx5_3",
-                  .gidIdx = 0,
-                  .hostIpAddr = "11.5.5.5",
-                  .clientIpAddr = "10.5.5.5",
+                  .gidIdx = 1,
+                  .clientIpAddr = "12.12.12.1",
                   .nbThreads = 1,
-                  .nbTasks = 4,
-                  .blkSize = 8192};
+                  .nbPipelineStages = 4};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
 
@@ -165,17 +146,14 @@ int main(int argc, char **argv) {
     CHECK_RETURN(doca_argp_start(argc, argv), "start argp");
 
     CHECK_RETURN(doca_argp_destroy(), "destroy argp");
-    DOCA_LOG_INFO("Cur config: nbThreads is %u, nbTasks is %u, blkSize is %lu",
-                  cfg.nbThreads, cfg.nbTasks, cfg.blkSize);
+    DOCA_LOG_INFO("Cur config: nbThreads is %u, nbPipelineStages is %u",
+                  cfg.nbThreads, cfg.nbPipelineStages);
 
     const uint16_t basePort = 22345;
     std::vector<CdnRscs> rscss;
     for (uint16_t i = 0; i < cfg.nbThreads; i++) {
         uint16_t portId = basePort + i;
-        CdnRscs rscs = {.threadId = i,
-                        .nbFinishedTasks = 0,
-                        .nbFreedTasks = 0,
-                        .port = portId};
+        CdnRscs rscs = {.threadId = i, .nbFreedTasks = 0, .port = portId};
         rscss.push_back(rscs);
     }
 
@@ -184,7 +162,7 @@ int main(int argc, char **argv) {
         threads.emplace_back(worker, cfg, std::ref(rscs));
     }
 
-    DOCA_LOG_INFO("Press enter to run tasks");
+    DOCA_LOG_INFO("Press Enter to serve requests");
     int enter = 0;
     while (enter != '\r' && enter != '\n') enter = getchar();
     gCanStart = true;
@@ -208,9 +186,10 @@ int main(int argc, char **argv) {
     double nbProcessedGBits = 0;
     uint32_t nbOps = 0;
     for (const CdnRscs &rscs : rscss) {
-        nbOps += rscs.nbFinishedTasks;
-        nbProcessedGBits += static_cast<double>(rscs.nbFinishedTasks) / 1e9 *
-                            kNbDataBlks * cfg.blkSize * 8;
+        nbOps += rscs.sizes.size();
+        for (const size_t &size : rscs.sizes) {
+            nbProcessedGBits += static_cast<double>(size) * 8 / 1e9;
+        }
     }
 
     const double timeCost =
