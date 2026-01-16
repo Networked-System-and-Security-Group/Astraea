@@ -78,6 +78,7 @@ void writeSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
 void writeErrCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
                 doca_data ctx_user_data) {
     doca_task_free(doca_rdma_task_write_imm_as_task(task));
+    DOCA_LOG_INFO("Write failed fuck");
 }
 
 static doca_error_t initTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {

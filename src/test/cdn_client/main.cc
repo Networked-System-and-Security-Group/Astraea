@@ -1,18 +1,17 @@
-#include <climits>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
 #include <doca_argp.h>
 #include <doca_error.h>
 #include <doca_log.h>
 #include <signal.h>
+
+#include <climits>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <thread>
 #include <vector>
 
 #include "cdn_client.h"
 #include "common.h"
-#include "doca_types.h"
-#include "rdma.h"
 
 DOCA_LOG_REGISTER(CDN:CLIENT : MAIN);
 
