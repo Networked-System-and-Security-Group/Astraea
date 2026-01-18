@@ -56,4 +56,5 @@ struct CdnClientCfg {
 };
 
 doca_error_t init(const CdnClientCfg &aCfg, CdnClientRscs &oCtx);
+void runTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs);
 void destroy(CdnClientRscs &aCtx);

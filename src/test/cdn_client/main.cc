@@ -1,18 +1,17 @@
-#include <climits>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
 #include <doca_argp.h>
 #include <doca_error.h>
 #include <doca_log.h>
 #include <signal.h>
+
+#include <climits>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <thread>
 #include <vector>
 
 #include "cdn_client.h"
 #include "common.h"
-#include "doca_types.h"
-#include "rdma.h"
 
 DOCA_LOG_REGISTER(CDN:CLIENT : MAIN);
 
@@ -38,7 +37,7 @@ static doca_error_t registerParams(CdnClientCfg &cfg) {
                  "register threads number cb");
     return DOCA_SUCCESS;
 }
-
+bool gCanStart = false;
 bool gForceQuit = false;
 static void signalHandler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
@@ -50,9 +49,11 @@ static void signalHandler(int signum) {
 doca_error_t worker(const CdnClientCfg &aCfg, CdnClientRscs &rscs) {
     CHECK_RETURN(init(aCfg, rscs), "init app");
 
-    while (!gForceQuit) {
+    while (!gCanStart) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
+
+    runTasks(aCfg, rscs);
 
     destroy(rscs);
     return DOCA_SUCCESS;
@@ -64,7 +65,7 @@ int main(int argc, char **argv) {
     CdnClientCfg cfg = {.ibdevName = "mlx5_3",
                         .gidIdx = 1,
                         .mmapSize = kSendSize * kTaskPoolSize,
-                        .nbThreads = 3};
+                        .nbThreads = 1};
 
     CHECK_RETURN(doca_argp_init("cdn_client", &cfg), "init argp");
 
@@ -86,6 +87,11 @@ int main(int argc, char **argv) {
     for (CdnClientRscs &rscs : rscss) {
         threads.emplace_back(worker, cfg, std::ref(rscs));
     }
+
+    DOCA_LOG_INFO("Press Enter to send requests");
+    int enter = 0;
+    while (enter != '\r' && enter != '\n') enter = getchar();
+    gCanStart = true;
 
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);

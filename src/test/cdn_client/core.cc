@@ -77,7 +77,11 @@ void writeSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
 
 void writeErrCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
                 doca_data ctx_user_data) {
-    doca_task_free(doca_rdma_task_write_imm_as_task(task));
+    // doca_task_free(doca_rdma_task_write_imm_as_task(task));
+    doca_error_t status =
+        doca_task_get_status(doca_rdma_task_write_imm_as_task(task));
+    DOCA_LOG_INFO("%s", doca_error_get_descr(status));
+    DOCA_LOG_INFO("Write failed fuck");
 }
 
 static doca_error_t initTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
@@ -162,17 +166,49 @@ doca_error_t init(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
 }
 
 void runTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
+    DOCA_LOG_INFO("Nb requests is %lu", aRscs.requests.size());
     const uint64_t t0 = aRscs.requests[0].ts_ms;
     aRscs.beginTime = std::chrono::high_resolution_clock::now();
     for (uint32_t i = aRscs.threadId; i < aRscs.requests.size(); ++i) {
+        DOCA_LOG_INFO("i is %u", i);
         uint64_t rel_ms = (aRscs.requests[i].ts_ms >= t0)
                               ? (aRscs.requests[i].ts_ms - t0)
                               : 0;
         auto target = aRscs.beginTime + std::chrono::milliseconds(rel_ms);
         std::this_thread::sleep_until(target);
 
+        doca_ctx_states state;
+        doca_ctx_get_state(aRscs.ctx, &state);
+        bool flag = false;
+        while (state == DOCA_CTX_STATE_STOPPING) {
+            if (!flag) {
+                doca_task_free(
+                    doca_rdma_task_write_imm_as_task(aRscs.writeTask));
+                flag = true;
+            }
+            doca_error_t status = doca_ctx_stop(aRscs.ctx);
+            if (status != DOCA_SUCCESS) {
+                DOCA_LOG_INFO("Failed to stop ctx: %s",
+                              doca_error_get_descr(status));
+            }
+            doca_pe_progress(aRscs.pe);
+            DOCA_LOG_INFO("ctx is stopping");
+            doca_ctx_get_state(aRscs.ctx, &state);
+        }
+
+        if (state == DOCA_CTX_STATE_IDLE) {
+            doca_ctx_start(aRscs.ctx);
+        }
+
+        doca_ctx_get_state(aRscs.ctx, &state);
+        while (state == DOCA_CTX_STATE_STARTING) {
+            DOCA_LOG_INFO("ctx is starting");
+            doca_pe_progress(aRscs.pe);
+        }
+
         doca_rdma_task_write_imm_set_immediate_data(
             aRscs.writeTask, htonl(aRscs.requests[i].size));
+
         CHECK_LOG(
             doca_task_submit(doca_rdma_task_write_imm_as_task(aRscs.writeTask)),
             "submit write imm task");
