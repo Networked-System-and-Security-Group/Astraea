@@ -81,6 +81,7 @@ void writeErrCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
     doca_error_t status =
         doca_task_get_status(doca_rdma_task_write_imm_as_task(task));
     DOCA_LOG_INFO("%s", doca_error_get_descr(status));
+    doca_task_free(doca_rdma_task_write_imm_as_task(task));
     DOCA_LOG_INFO("Write failed fuck");
 }
 
