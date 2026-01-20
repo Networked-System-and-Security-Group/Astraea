@@ -11,7 +11,7 @@
 #include <cstdint>
 
 /* This is unlimited actually */
-constexpr uint32_t MAX_NB_RDMA_TASKS = 8192;
+constexpr uint32_t MAX_NB_RDMA_TASKS = 1024;
 
 doca_error_t initRdma(uint32_t aGidIdx, doca_dev *aDev, doca_pe *aPe,
                       doca_rdma_task_read_completion_cb_t aReadSuccCb,
