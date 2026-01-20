@@ -79,6 +79,8 @@ void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
     u32 stageId = userData->stageId;
 
     if (!gForceQuit) {
+        DOCA_LOG_INFO("stageId is %u, requestId is %u, bufs size is %lu",
+                      stageId, rscs.requestIds[stageId], rscs.bufs.size());
         CHECK_LOG(doca_buf_set_data_len(rscs.bufs[stageId], 0),
                   "set recv buf len to 0");
         CHECK_LOG(doca_task_submit(
@@ -158,6 +160,11 @@ void recvErrCb(doca_rdma_task_receive *task, doca_data task_user_data,
 }
 
 static doca_error_t initTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
+    // 预先分配空间，防止 push_back 时 vector 重新分配导致之前保存的指针失效
+    aRscs.userDatas.reserve(aCfg.nbPipelineStages);
+    aRscs.immTasks.reserve(aCfg.nbPipelineStages);
+    aRscs.recvTasks.reserve(aCfg.nbPipelineStages);
+
     for (u32 i = 0; i < aCfg.nbPipelineStages; ++i) {
         CdnClientUserData userData = {.rscs = aRscs, .cfg = aCfg, .stageId = i};
         aRscs.userDatas.push_back(userData);
