@@ -11,20 +11,25 @@
 #include <cstdint>
 #include <vector>
 
-constexpr uint32_t kTaskPoolSize = 32;
-constexpr size_t kBlkSize = 65536;
-constexpr uint32_t kNbDataBlks = 128;
-constexpr uint32_t kNbRdncBlks = 32;
-constexpr size_t kDataSize = kBlkSize * kNbDataBlks;
-constexpr size_t kRdncSize = kBlkSize * kNbRdncBlks;
-constexpr size_t kSendSize = kDataSize + kRdncSize;
+using u32 = uint32_t;
+
+constexpr size_t kMaxMsgSize = 1024 * 1024 * 1024;
 
 struct Request {
     uint64_t ts_ms;
     uint64_t size;
 };
 
-struct CdnClientRscs {
+struct alignas(64) CdnClientRscs;
+struct alignas(64) CdnClientCfg;
+
+struct alignas(64) CdnClientUserData {
+    CdnClientRscs &rscs;
+    const CdnClientCfg &cfg;
+    u32 stageId;
+};
+
+struct alignas(64) CdnClientRscs {
     doca_rdma *rdma;
     doca_ctx *ctx;
     doca_pe *pe;
@@ -34,25 +39,37 @@ struct CdnClientRscs {
     doca_mmap *mmap;
     doca_buf_inventory *bufInv;
     void *memAddr;
+    std::vector<doca_buf *> bufs;
 
-    doca_rdma_task_write_imm *writeTask;
+    std::vector<CdnClientUserData> userDatas;
+    std::vector<doca_rdma_task_write_imm *> immTasks;
+    std::vector<doca_rdma_task_receive *> recvTasks;
+
     bool isFreeded = false;
 
     /* Thread metadata, should init by main thread */
-    uint32_t threadId;
+    u32 threadId;
     uint16_t port;
 
-    std::chrono::high_resolution_clock::time_point beginTime;
-    std::chrono::high_resolution_clock::time_point endTime;
+    u32 nbFreedTasks;
+    u32 nbFinishedTasks;
+    double nbProcessedGBits;
+
+    std::vector<std::chrono::high_resolution_clock::time_point> beginTimes;
+    std::vector<std::chrono::high_resolution_clock::time_point> endTimes;
+    std::vector<double> timeCosts;
 
     std::vector<Request> requests;
+    std::vector<u32> requestIds;
 };
 
-struct CdnClientCfg {
+struct alignas(64) CdnClientCfg {
     char ibdevName[1024];
-    uint32_t gidIdx;
+    u32 gidIdx;
+    char serverIpAddr[1024];
     size_t mmapSize;
     uint16_t nbThreads;
+    u32 nbPipelineStages;
 };
 
 doca_error_t init(const CdnClientCfg &aCfg, CdnClientRscs &oCtx);

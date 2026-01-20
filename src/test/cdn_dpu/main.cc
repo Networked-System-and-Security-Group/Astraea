@@ -25,7 +25,7 @@ bool gForceQuit = false;
 
 using TimePoint = std::chrono::high_resolution_clock::time_point;
 
-TimePoint beginTime, endTime;
+TimePoint gBeginTime, gEndTime;
 
 static void processAndWriteData(const std::vector<std::vector<double>> &data,
                                 const char *path) {
@@ -112,9 +112,9 @@ static doca_error_t registerParams(CdnCfg &cfg) {
 doca_error_t worker(const CdnCfg &aCfg, CdnRscs &rscs) {
     CHECK_RETURN(init(aCfg, rscs), "init app");
 
-    while (!gCanStart) {
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
+    // while (!gCanStart) {
+    //     std::this_thread::sleep_for(std::chrono::microseconds(10));
+    // }
 
     runTasks(aCfg, rscs);
 
@@ -126,7 +126,7 @@ static void signalHandler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
         printf("\n\nSignal %d received, preparing to exit...\n", signum);
         gForceQuit = true;
-        endTime = std::chrono::high_resolution_clock::now();
+        gEndTime = std::chrono::high_resolution_clock::now();
     }
 }
 
@@ -135,7 +135,6 @@ int main(int argc, char **argv) {
 
     CdnCfg cfg = {.ibdevName = "mlx5_3",
                   .gidIdx = 1,
-                  .clientIpAddr = "12.12.12.1",
                   .nbThreads = 1,
                   .nbPipelineStages = 4};
 
@@ -162,11 +161,11 @@ int main(int argc, char **argv) {
         threads.emplace_back(worker, cfg, std::ref(rscs));
     }
 
-    DOCA_LOG_INFO("Press Enter to serve requests");
-    int enter = 0;
-    while (enter != '\r' && enter != '\n') enter = getchar();
-    gCanStart = true;
-    beginTime = std::chrono::high_resolution_clock::now();
+    // DOCA_LOG_INFO("Press Enter to serve requests");
+    // int enter = 0;
+    // while (enter != '\r' && enter != '\n') enter = getchar();
+    // gCanStart = true;
+    gBeginTime = std::chrono::high_resolution_clock::now();
 
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
@@ -193,8 +192,8 @@ int main(int argc, char **argv) {
     }
 
     const double timeCost =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(endTime -
-                                                             beginTime)
+        std::chrono::duration_cast<std::chrono::nanoseconds>(gEndTime -
+                                                             gBeginTime)
             .count() /
         1e9;
     const double gbps = nbProcessedGBits / timeCost;

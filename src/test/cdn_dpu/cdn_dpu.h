@@ -16,6 +16,7 @@ using u32 = uint32_t;
 
 constexpr u32 kNbDataBlks = 128;
 constexpr u32 kNbRdncBlks = 32;
+constexpr size_t kMinChunkSize = 128 * 64;
 constexpr size_t kMaxChunkSize = 128 * 1024 * 1024;
 constexpr u32 kMaxNbChunks = 8;  // 1G / 128M = 8
 
@@ -25,26 +26,26 @@ struct alignas(64) CdnCfg;
 struct alignas(64) CdnUserData {
     CdnRscs &rscs;
     const CdnCfg &cfg;
-    u32 taskId;
+    u32 stageId;
     size_t requestSize;
     u32 chunkId;
     u32 nbChunks;
 };
 
 struct TaskPack {
-    CdnUserData userData;
+    std::vector<CdnUserData> userDatas;
 
     // Bufs
     std::vector<doca_buf *> dataBufs;
     std::vector<doca_buf *> rdncBufs;
-    std::vector<doca_buf *> sendBufs;
-    std::vector<doca_buf *> clientBufs;
+
+    doca_buf *sendBuf;
+    doca_buf *clientBuf;
 
     // Tasks
-    doca_rdma_task_receive *recvTasks;
-    // Each ec task and write task is for a certain chunk
+    doca_rdma_task_receive *recvTask;
+    doca_rdma_task_write_imm *immTask;
     std::vector<doca_ec_task_recover *> ecTasks;
-    std::vector<doca_rdma_task_write *> writeTasks;
 };
 
 struct alignas(64) CdnRscs {
@@ -90,7 +91,6 @@ struct alignas(64) CdnRscs {
 struct alignas(64) CdnCfg {
     char ibdevName[1024];
     u32 gidIdx;
-    char clientIpAddr[1024];
     uint16_t nbThreads;
     u32 nbPipelineStages;
 };

@@ -3,6 +3,7 @@
 #include <doca_log.h>
 #include <signal.h>
 
+#include <chrono>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -37,12 +38,17 @@ static doca_error_t registerParams(CdnClientCfg &cfg) {
                  "register threads number cb");
     return DOCA_SUCCESS;
 }
+
+std::chrono::high_resolution_clock::time_point gBeginTime, gEndTime;
+
 bool gCanStart = false;
 bool gForceQuit = false;
+
 static void signalHandler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
         printf("\n\nSignal %d received, preparing to exit...\n", signum);
         gForceQuit = true;
+        gEndTime = std::chrono::high_resolution_clock::now();
     }
 }
 
@@ -64,8 +70,10 @@ int main(int argc, char **argv) {
 
     CdnClientCfg cfg = {.ibdevName = "mlx5_3",
                         .gidIdx = 1,
-                        .mmapSize = kSendSize * kTaskPoolSize,
-                        .nbThreads = 1};
+                        .serverIpAddr = "12.12.12.2",
+                        .mmapSize = kMaxMsgSize,
+                        .nbThreads = 1,
+                        .nbPipelineStages = 4};
 
     CHECK_RETURN(doca_argp_init("cdn_client", &cfg), "init argp");
 
@@ -79,7 +87,12 @@ int main(int argc, char **argv) {
 
     for (uint16_t i = 0; i < cfg.nbThreads; i++) {
         uint16_t portId = basePort + i;
-        CdnClientRscs rscs = {.threadId = i, .port = portId};
+        CdnClientRscs rscs = {.threadId = i,
+                              .port = portId,
+                              .nbFreedTasks = 0,
+                              .nbFinishedTasks = 0,
+                              .nbProcessedGBits = 0};
+
         rscss.push_back(rscs);
     }
 
@@ -92,10 +105,28 @@ int main(int argc, char **argv) {
     int enter = 0;
     while (enter != '\r' && enter != '\n') enter = getchar();
     gCanStart = true;
+    gBeginTime = std::chrono::high_resolution_clock::now();
 
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
     DOCA_LOG_INFO("Press Ctrl-C to stop");
 
+    for (std::jthread &thread : threads) {
+        thread.join();
+    }
+
+    gEndTime = std::chrono::high_resolution_clock::now();
+
+    double nbProcessedGBits = 0;
+    for (auto &rscs : rscss) {
+        nbProcessedGBits += rscs.nbProcessedGBits;
+    }
+
+    double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          gEndTime - gBeginTime)
+                          .count() /
+                      1e9;
+    DOCA_LOG_INFO("Finished %.2fGb in %.2fs, throughtput is %.2fGbps",
+                  nbProcessedGBits, timeCost, nbProcessedGBits / timeCost);
     return 0;
 }
