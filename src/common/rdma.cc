@@ -133,6 +133,12 @@ doca_error_t rdmaConnectToClient(doca_dev *aDev, uint16_t aPort,
                                  doca_rdma *aRdma, uint16_t aThreadId,
                                  doca_rdma_connection *&aConn,
                                  doca_mmap *&remoteMmap) {
+    const void *localConnDesc;
+    size_t localConnDescSize;
+    CHECK_RETURN(
+        doca_rdma_export(aRdma, &localConnDesc, &localConnDescSize, &aConn),
+        "export connection");
+
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -159,17 +165,12 @@ doca_error_t rdmaConnectToClient(doca_dev *aDev, uint16_t aPort,
         "connect to remote");
 
     /* 2. send local connection info to remote */
-    const void *localConnDesc;
-    size_t localConnDescSize;
-    CHECK_RETURN(
-        doca_rdma_export(aRdma, &localConnDesc, &localConnDescSize, &aConn),
-        "export connection");
     sendMsg(c, static_cast<const char *>(localConnDesc), localConnDescSize);
 
     /* 4. receive host mmap info */
     char remoteMmapDesc[1024] = {0};
     size_t remoteMmapDescSize;
-    remoteMmapDescSize = recvMsg(sockfd, remoteMmapDesc);
+    remoteMmapDescSize = recvMsg(c, remoteMmapDesc);  // 使用 c 而不是 sockfd
     close(c);
     close(sockfd);
 

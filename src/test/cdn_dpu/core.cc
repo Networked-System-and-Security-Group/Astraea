@@ -37,7 +37,6 @@ static void freeTasks(CdnRscs &aRscs, u32 aStageId) {
 
 static void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
                        doca_data ctx_user_data) {
-    DOCA_LOG_INFO("In recv succ cb");
     CdnUserData *userData = static_cast<CdnUserData *>(task_user_data.ptr);
     CdnRscs &rscs = userData->rscs;
     u32 stageId = userData->stageId;
@@ -134,6 +133,7 @@ static void ecErrCb(doca_ec_task_recover *task, doca_data task_user_data,
 //     DOCA_LOG_ERR("Write task failed");
 // }
 
+u32 fin = 0;
 static void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
                       doca_data ctx_user_data) {
     CdnUserData *userData = static_cast<CdnUserData *>(task_user_data.ptr);
@@ -141,6 +141,8 @@ static void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
     u32 stageId = userData->stageId;
     if (!gForceQuit) {
         rscs.sizes.push_back(userData->requestSize);
+        ++fin;
+        DOCA_LOG_INFO("Nb finished task is %u", fin);
         CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
                       rscs.packs[stageId].recvTask)),
                   "submit receive task in cb");
