@@ -77,8 +77,6 @@ void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
     if (!gForceQuit) {
         const uint64_t t0 = rscs.requests[stageId].ts_ms;
         u32 &requestId = rscs.requestIds[stageId];
-        DOCA_LOG_INFO("Enter imm succ cb, the finished request id is %u",
-                      requestId);
         rscs.nbProcessedGBits += rscs.requests[requestId].size * 8 / 1e9;
 
         requestId += userData->cfg.nbPipelineStages;
@@ -137,7 +135,9 @@ void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
     if (!gForceQuit) {
         rscs.nbFinishedTasks++;
         u32 &recvId = rscs.recvIds[stageId];
-        DOCA_LOG_INFO("recvId = %u", recvId);
+        if (recvId % 100 == 0) {
+            DOCA_LOG_INFO("Finished %u requests", recvId);
+        }
         recvId += userData->cfg.nbPipelineStages;
         if (recvId < rscs.requests.size()) {
             CHECK_LOG(doca_buf_set_data_len(rscs.bufs[stageId], 0),
