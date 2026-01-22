@@ -266,7 +266,6 @@ doca_error_t init(const CdnCfg &aCfg, CdnRscs &aRscs) {
 }
 
 void runTasks(const CdnCfg &aCfg, CdnRscs &aRscs) {
-    DOCA_LOG_INFO("Before submit");
     for (u32 i = 0; i < aCfg.nbPipelineStages; i++) {
         aRscs.recvIds.push_back(i);
         CHECK_LOG(doca_task_submit(
