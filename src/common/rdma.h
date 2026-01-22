@@ -24,7 +24,7 @@ doca_error_t initRdma(uint32_t aGidIdx, doca_dev *aDev, doca_pe *aPe,
                       doca_rdma_task_write_imm_completion_cb_t aImmErrCb,
                       doca_rdma *&aRdma, doca_ctx *&aCtx);
 
-void destroyRdma(doca_rdma *aRdma, doca_ctx *aCtx, doca_pe *aPe);
+void destroyRdma(doca_rdma *aRdma, doca_ctx *aCtx);
 
 doca_error_t rdmaConnectToServer(doca_dev *aDev, const char *aIpAddr,
                                  uint16_t aPort, doca_rdma *aRdma,

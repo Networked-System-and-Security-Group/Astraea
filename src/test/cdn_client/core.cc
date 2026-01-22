@@ -272,7 +272,7 @@ void runTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
 }
 
 void destroy(CdnClientRscs &aRscs) {
-    destroyRdma(aRscs.rdma, aRscs.ctx, aRscs.pe);
+    destroyRdma(aRscs.rdma, aRscs.ctx);
     destroyBufs(aRscs);
     destroyMemory(aRscs.memAddr, aRscs.mmap, aRscs.bufInv);
     CHECK_LOG(doca_pe_destroy(aRscs.pe), "destroy pe");
