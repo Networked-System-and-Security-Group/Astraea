@@ -7,7 +7,6 @@
 #include <doca_pe.h>
 #include <doca_rdma.h>
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -82,10 +81,8 @@ struct alignas(64) CdnRscs {
     // u32 nbFinishedTasks;
     u32 nbFreedTasks;
     uint16_t port;
-    std::vector<std::chrono::high_resolution_clock::time_point> beginTimes;
-    std::vector<std::chrono::high_resolution_clock::time_point> endTimes;
-    std::vector<double> timeCosts;
-    std::vector<size_t> sizes;
+
+    std::vector<u32> recvIds;
 };
 
 struct alignas(64) CdnCfg {
@@ -93,6 +90,7 @@ struct alignas(64) CdnCfg {
     u32 gidIdx;
     uint16_t nbThreads;
     u32 nbPipelineStages;
+    u32 nbRequests;
 };
 
 doca_error_t init(const CdnCfg &aCfg, CdnRscs &oCtx);

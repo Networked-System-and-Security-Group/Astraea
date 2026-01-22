@@ -4,7 +4,6 @@
 #include <signal.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -23,12 +22,8 @@ bool gCanStart = false;
 /* Not treating gForceQuit as atomic doesn't matter a lot */
 bool gForceQuit = false;
 
-using TimePoint = std::chrono::high_resolution_clock::time_point;
-
-TimePoint gBeginTime, gEndTime;
-
-static void processAndWriteData(const std::vector<std::vector<double>> &data,
-                                const char *path) {
+__attribute__((unused)) static void processAndWriteData(
+    const std::vector<std::vector<double>> &data, const char *path) {
     // 合并所有 vector<double> 到一个 vector 中
     std::vector<double> merged;
     for (const auto &vec : data) {
@@ -95,26 +90,30 @@ static doca_error_t nbPipelineStagesCb(void *aNbPipelineStages, void *aCfg) {
     return DOCA_SUCCESS;
 }
 
+static doca_error_t nbRequestsCb(void *aNbRequests, void *aCfg) {
+    static_cast<CdnCfg *>(aCfg)->nbRequests = *static_cast<u32 *>(aNbRequests);
+    return DOCA_SUCCESS;
+}
+
 static doca_error_t registerParams(CdnCfg &cfg) {
     CHECK_RETURN(
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name cb");
 
-    CHECK_RETURN(registerOneParam("nth", "number of threads",
-                                  DOCA_ARGP_TYPE_INT, nbThreadsCb),
+    CHECK_RETURN(registerOneParam("t", "number of threads", DOCA_ARGP_TYPE_INT,
+                                  nbThreadsCb),
                  "register threads number cb");
-    CHECK_RETURN(registerOneParam("ntk", "number of tasks", DOCA_ARGP_TYPE_INT,
-                                  nbPipelineStagesCb),
-                 "register task number cb");
+    CHECK_RETURN(registerOneParam("p", "number of pipeline stages",
+                                  DOCA_ARGP_TYPE_INT, nbPipelineStagesCb),
+                 "register pipeline stages number cb");
+    CHECK_RETURN(registerOneParam("r", "number of requests", DOCA_ARGP_TYPE_INT,
+                                  nbRequestsCb),
+                 "register requests number cb");
     return DOCA_SUCCESS;
 }
 
 doca_error_t worker(const CdnCfg &aCfg, CdnRscs &rscs) {
     CHECK_RETURN(init(aCfg, rscs), "init app");
-
-    // while (!gCanStart) {
-    //     std::this_thread::sleep_for(std::chrono::microseconds(10));
-    // }
 
     runTasks(aCfg, rscs);
 
@@ -126,7 +125,6 @@ static void signalHandler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
         printf("\n\nSignal %d received, preparing to exit...\n", signum);
         gForceQuit = true;
-        gEndTime = std::chrono::high_resolution_clock::now();
     }
 }
 
@@ -136,7 +134,8 @@ int main(int argc, char **argv) {
     CdnCfg cfg = {.ibdevName = "mlx5_3",
                   .gidIdx = 1,
                   .nbThreads = 1,
-                  .nbPipelineStages = 4};
+                  .nbPipelineStages = 4,
+                  .nbRequests = 10};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
 
@@ -161,12 +160,6 @@ int main(int argc, char **argv) {
         threads.emplace_back(worker, cfg, std::ref(rscs));
     }
 
-    // DOCA_LOG_INFO("Press Enter to serve requests");
-    // int enter = 0;
-    // while (enter != '\r' && enter != '\n') enter = getchar();
-    // gCanStart = true;
-    gBeginTime = std::chrono::high_resolution_clock::now();
-
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
     DOCA_LOG_INFO("Press Ctrl-C to stop");
@@ -175,31 +168,9 @@ int main(int argc, char **argv) {
         thread.join();
     }
 
-    std::vector<std::vector<double>> allCosts;
-    for (const CdnRscs &rscs : rscss) {
-        allCosts.push_back(rscs.timeCosts);
-    }
+    // std::vector<std::vector<double>> allCosts;
 
-    processAndWriteData(allCosts, getenv("RES_PATH"));
-
-    double nbProcessedGBits = 0;
-    uint32_t nbOps = 0;
-    for (const CdnRscs &rscs : rscss) {
-        nbOps += rscs.sizes.size();
-        for (const size_t &size : rscs.sizes) {
-            nbProcessedGBits += static_cast<double>(size) * 8 / 1e9;
-        }
-    }
-
-    const double timeCost =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(gEndTime -
-                                                             gBeginTime)
-            .count() /
-        1e9;
-    const double gbps = nbProcessedGBits / timeCost;
-    const double ops = nbOps / timeCost;
-    DOCA_LOG_INFO("Processed %.0fGb in %fs, throughput is %.2fGbps, ops is %f",
-                  nbProcessedGBits, timeCost, gbps, ops);
+    // processAndWriteData(allCosts, getenv("RES_PATH"));
 
     return 0;
 }

@@ -9,11 +9,10 @@
 #include <doca_pe.h>
 #include <doca_rdma.h>
 #include <doca_types.h>
-#include <netinet/in.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 
 #include "cdn_dpu.h"
@@ -40,8 +39,7 @@ static void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
     CdnUserData *userData = static_cast<CdnUserData *>(task_user_data.ptr);
     CdnRscs &rscs = userData->rscs;
     u32 stageId = userData->stageId;
-
-    rscs.beginTimes.push_back(std::chrono::high_resolution_clock::now());
+    rscs.recvIds[stageId] += userData->cfg.nbPipelineStages;
 
     doca_be32_t be_imm = doca_rdma_task_receive_get_result_immediate_data(task);
     u32 imm = ntohl(be_imm);
@@ -66,7 +64,9 @@ static void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
 }
 
 static void recvErrCb(doca_rdma_task_receive *task, doca_data task_user_data,
-                      doca_data ctx_user_data) {}
+                      doca_data ctx_user_data) {
+    DOCA_LOG_INFO("Recv failed");
+}
 
 static void ecSuccCb(doca_ec_task_recover *task, doca_data task_user_data,
                      doca_data ctx_user_data) {
@@ -98,56 +98,20 @@ static void ecErrCb(doca_ec_task_recover *task, doca_data task_user_data,
     DOCA_LOG_ERR("EC task failed");
 }
 
-// static void WriteSuccCb(doca_rdma_task_write *task, doca_data task_user_data,
-//                         doca_data ctx_user_data) {
-//     CdnUserData *userData = static_cast<CdnUserData *>(task_user_data.ptr);
-//     CdnRscs &rscs = userData->rscs;
-//     u32 stageId = userData->stageId;
-//     if (!gForceQuit) {
-//         if (userData->chunkId == userData->nbChunks - 1) {
-//             userData->chunkId = 0;
-//             userData->nbChunks = 1;
-//             rscs.sizes.push_back(userData->requestSize);
-//             CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
-//                           rscs.packs[stageId].recvTasks)),
-//                       "submit receive task in cb");
-
-//             rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
-//         }
-//     } else {
-//         if (userData->chunkId == userData->nbChunks - 1) {
-//             freeTasks(rscs, stageId);
-//             rscs.nbFreedTasks++;
-//         }
-//     }
-// }
-
-// static void WriteErrCb(doca_rdma_task_write *task, doca_data task_user_data,
-//                        doca_data ctx_user_data) {
-//     CdnUserData *userData = static_cast<CdnUserData *>(task_user_data.ptr);
-//     CdnRscs &rscs = userData->rscs;
-//     u32 stageId = userData->stageId;
-//     gForceQuit = true;
-//     freeTasks(rscs, stageId);
-//     rscs.nbFreedTasks++;
-//     DOCA_LOG_ERR("Write task failed");
-// }
-
-u32 fin = 0;
 static void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
                       doca_data ctx_user_data) {
     CdnUserData *userData = static_cast<CdnUserData *>(task_user_data.ptr);
     CdnRscs &rscs = userData->rscs;
     u32 stageId = userData->stageId;
     if (!gForceQuit) {
-        rscs.sizes.push_back(userData->requestSize);
-        ++fin;
-        DOCA_LOG_INFO("Nb finished task is %u", fin);
-        CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
-                      rscs.packs[stageId].recvTask)),
-                  "submit receive task in cb");
-
-        rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
+        if (rscs.recvIds[stageId] < userData->cfg.nbRequests) {
+            CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
+                          rscs.packs[stageId].recvTask)),
+                      "submit receive task in cb");
+        } else {
+            freeTasks(rscs, stageId);
+            rscs.nbFreedTasks++;
+        }
     } else {
         freeTasks(rscs, stageId);
         rscs.nbFreedTasks++;
@@ -304,26 +268,15 @@ doca_error_t init(const CdnCfg &aCfg, CdnRscs &aRscs) {
 void runTasks(const CdnCfg &aCfg, CdnRscs &aRscs) {
     DOCA_LOG_INFO("Before submit");
     for (u32 i = 0; i < aCfg.nbPipelineStages; i++) {
+        aRscs.recvIds.push_back(i);
         CHECK_LOG(doca_task_submit(
                       doca_rdma_task_receive_as_task(aRscs.packs[i].recvTask)),
                   "submit recv task");
     }
     DOCA_LOG_INFO("Submitted recv tasks");
 
-    while (!gForceQuit) {
+    while (!gForceQuit && aRscs.nbFreedTasks < aCfg.nbPipelineStages) {
         doca_pe_progress(aRscs.pe);
-    }
-
-    while (aRscs.nbFreedTasks < aCfg.nbPipelineStages) {
-        doca_pe_progress(aRscs.pe);
-    }
-
-    for (u32 i = 0; i < aRscs.sizes.size(); i++) {
-        double timeCost = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                              aRscs.endTimes[i] - aRscs.beginTimes[i])
-                              .count() /
-                          1000.0;
-        aRscs.timeCosts.push_back(timeCost);
     }
 }
 
