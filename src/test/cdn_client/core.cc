@@ -21,6 +21,7 @@
 #include "common.h"
 #include "doca_buf.h"
 #include "doca_buf_inventory.h"
+#include "doca_types.h"
 #include "memory.h"
 #include "rdma.h"
 
@@ -66,11 +67,6 @@ std::vector<Request> load_requests_text(const std::string &path) {
     return events;
 }
 
-static void freeTasks(CdnClientRscs &aRscs, u32 aStageId) {
-    doca_task_free(doca_rdma_task_receive_as_task(aRscs.recvTasks[aStageId]));
-    doca_task_free(doca_rdma_task_write_imm_as_task(aRscs.immTasks[aStageId]));
-}
-
 void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
                doca_data ctx_user_data) {
     CdnClientUserData *userData =
@@ -79,48 +75,13 @@ void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
     u32 stageId = userData->stageId;
 
     if (!gForceQuit) {
-        DOCA_LOG_INFO("stageId is %u, requestId is %u, bufs size is %lu",
-                      stageId, rscs.requestIds[stageId], rscs.bufs.size());
-        CHECK_LOG(doca_buf_set_data_len(rscs.bufs[stageId], 0),
-                  "set recv buf len to 0");
-        CHECK_LOG(doca_task_submit(
-                      doca_rdma_task_receive_as_task(rscs.recvTasks[stageId])),
-                  "submit write imm task");
-    } else {
-        freeTasks(rscs, stageId);
-        rscs.nbFreedTasks++;
-    }
-}
-
-void immErrCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
-              doca_data ctx_user_data) {
-    CdnClientUserData *userData =
-        static_cast<CdnClientUserData *>(task_user_data.ptr);
-    CdnClientRscs &rscs = userData->rscs;
-    u32 stageId = userData->stageId;
-    gForceQuit = true;
-
-    freeTasks(rscs, stageId);
-    rscs.nbFreedTasks++;
-    DOCA_LOG_ERR("Write imm task failed");
-}
-
-void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
-                doca_data ctx_user_data) {
-    CdnClientUserData *userData =
-        static_cast<CdnClientUserData *>(task_user_data.ptr);
-    const CdnClientCfg &cfg = userData->cfg;
-    CdnClientRscs &rscs = userData->rscs;
-    u32 stageId = userData->stageId;
-    rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
-
-    if (!gForceQuit) {
-        rscs.nbFinishedTasks++;
         const uint64_t t0 = rscs.requests[stageId].ts_ms;
         u32 &requestId = rscs.requestIds[stageId];
+        DOCA_LOG_INFO("Enter imm succ cb, the finished request id is %u",
+                      requestId);
         rscs.nbProcessedGBits += rscs.requests[requestId].size * 8 / 1e9;
 
-        requestId += cfg.nbPipelineStages;
+        requestId += userData->cfg.nbPipelineStages;
 
         if (requestId < rscs.requests.size()) {
             uint64_t rel_ms = (rscs.requests[requestId].ts_ms >= t0)
@@ -132,16 +93,65 @@ void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
             doca_rdma_task_write_imm_set_immediate_data(
                 rscs.immTasks[stageId], htonl(rscs.requests[stageId].size));
 
+            while (!rscs.canWrite[stageId]) {
+                doca_pe_progress(rscs.pe);
+                // DOCA_LOG_INFO("In polling, the next request id is %u",
+                //               requestId);
+            }
             CHECK_LOG(doca_task_submit(doca_rdma_task_write_imm_as_task(
                           rscs.immTasks[stageId])),
                       "submit write imm task");
+            rscs.canWrite[stageId] = false;
         } else {
-            gForceQuit = true;
+            doca_task_free(
+                doca_rdma_task_write_imm_as_task(rscs.immTasks[stageId]));
+            rscs.nbFreedTasks++;
         }
+    } else {
+        doca_task_free(
+            doca_rdma_task_write_imm_as_task(rscs.immTasks[stageId]));
+        rscs.nbFreedTasks++;
     }
+}
 
-    if (gForceQuit) {
-        freeTasks(rscs, stageId);
+void immErrCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
+              doca_data ctx_user_data) {
+    CdnClientUserData *userData =
+        static_cast<CdnClientUserData *>(task_user_data.ptr);
+    CdnClientRscs &rscs = userData->rscs;
+    gForceQuit = true;
+
+    doca_task_free(doca_rdma_task_write_imm_as_task(task));
+    rscs.nbFreedTasks++;
+    DOCA_LOG_ERR("Write imm task failed");
+}
+
+void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
+                doca_data ctx_user_data) {
+    CdnClientUserData *userData =
+        static_cast<CdnClientUserData *>(task_user_data.ptr);
+    CdnClientRscs &rscs = userData->rscs;
+    u32 stageId = userData->stageId;
+    rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
+
+    if (!gForceQuit) {
+        rscs.nbFinishedTasks++;
+        u32 &recvId = rscs.recvIds[stageId];
+        DOCA_LOG_INFO("recvId = %u", recvId);
+        recvId += userData->cfg.nbPipelineStages;
+        if (recvId < rscs.requests.size()) {
+            CHECK_LOG(doca_buf_set_data_len(rscs.bufs[stageId], 0),
+                      "set recv buf len to 0");
+            CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
+                          rscs.recvTasks[stageId])),
+                      "submit write imm task");
+            rscs.canWrite[stageId] = true;
+        } else {
+            doca_task_free(doca_rdma_task_receive_as_task(task));
+            rscs.nbFreedTasks++;
+        }
+    } else {
+        doca_task_free(doca_rdma_task_receive_as_task(task));
         rscs.nbFreedTasks++;
     }
 }
@@ -151,10 +161,9 @@ void recvErrCb(doca_rdma_task_receive *task, doca_data task_user_data,
     CdnClientUserData *userData =
         static_cast<CdnClientUserData *>(task_user_data.ptr);
     CdnClientRscs &rscs = userData->rscs;
-    u32 stageId = userData->stageId;
     gForceQuit = true;
 
-    freeTasks(rscs, stageId);
+    doca_task_free(doca_rdma_task_receive_as_task(task));
     rscs.nbFreedTasks++;
     DOCA_LOG_ERR("Recv task failed");
 }
@@ -235,7 +244,12 @@ void runTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
 
     for (u32 i = 0; i < aCfg.nbPipelineStages; ++i) {
         aRscs.requestIds.push_back(i);
+        aRscs.recvIds.push_back(i);
         aRscs.beginTimes.push_back(std::chrono::high_resolution_clock::now());
+        aRscs.canWrite.push_back(false);
+
+        // Submit recv task before imm task
+        doca_task_submit(doca_rdma_task_receive_as_task(aRscs.recvTasks[i]));
         doca_rdma_task_write_imm_set_immediate_data(
             aRscs.immTasks[i], htonl(aRscs.requests[aRscs.requestIds[i]].size));
         CHECK_LOG(doca_task_submit(
@@ -243,11 +257,8 @@ void runTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
                   "submit write imm task");
     }
 
-    while (!gForceQuit) {
-        doca_pe_progress(aRscs.pe);
-    }
-
-    while (aRscs.nbFreedTasks < aCfg.nbPipelineStages) {
+    // * 2 means both imm tasks and recv tasks should be freed
+    while (!gForceQuit && aRscs.nbFreedTasks < aCfg.nbPipelineStages * 2) {
         doca_pe_progress(aRscs.pe);
     }
 
@@ -261,7 +272,7 @@ void runTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
 }
 
 void destroy(CdnClientRscs &aRscs) {
-    destroyRdma(aRscs.rdma, aRscs.ctx);
+    destroyRdma(aRscs.rdma, aRscs.ctx, aRscs.pe);
     destroyBufs(aRscs);
     destroyMemory(aRscs.memAddr, aRscs.mmap, aRscs.bufInv);
     CHECK_LOG(doca_pe_destroy(aRscs.pe), "destroy pe");

@@ -74,8 +74,18 @@ doca_error_t initRdma(uint32_t aGidIdx, doca_dev *aDev, doca_pe *aPe,
     return DOCA_SUCCESS;
 }
 
-void destroyRdma(doca_rdma *aRdma, doca_ctx *aCtx) {
+void destroyRdma(doca_rdma *aRdma, doca_ctx *aCtx, doca_pe *aPe) {
+    doca_ctx_states state;
+    doca_ctx_get_state(aCtx, &state);
+    DOCA_LOG_INFO("Before stop, ctx state is %u", state);
+
     CHECK_LOG(doca_ctx_stop(aCtx), "stop rdma ctx");
+    doca_ctx_get_state(aCtx, &state);
+    while (state != DOCA_CTX_STATE_IDLE) {
+        doca_pe_progress(aPe);
+        doca_ctx_get_state(aCtx, &state);
+        DOCA_LOG_INFO("Polling ctx, state is %u", state);
+    }
     CHECK_LOG(doca_rdma_destroy(aRdma), "destroy rdma");
 }
 

@@ -44,6 +44,7 @@ struct alignas(64) CdnClientRscs {
     std::vector<CdnClientUserData> userDatas;
     std::vector<doca_rdma_task_write_imm *> immTasks;
     std::vector<doca_rdma_task_receive *> recvTasks;
+    std::vector<bool> canWrite;
 
     bool isFreeded = false;
 
@@ -61,6 +62,7 @@ struct alignas(64) CdnClientRscs {
 
     std::vector<Request> requests;
     std::vector<u32> requestIds;
+    std::vector<u32> recvIds;
 };
 
 struct alignas(64) CdnClientCfg {
