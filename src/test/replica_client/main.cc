@@ -1,17 +1,16 @@
-#include <climits>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
 #include <doca_argp.h>
 #include <doca_error.h>
 #include <doca_log.h>
 #include <signal.h>
+
+#include <climits>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <thread>
 #include <vector>
 
 #include "common.h"
-#include "doca_types.h"
-#include "rdma.h"
 #include "replica_client.h"
 
 DOCA_LOG_REGISTER(REPLICA:CLIENT : MAIN);
@@ -64,7 +63,8 @@ int main(int argc, char **argv) {
     ReplicaCfg cfg = {.ibdevName = "mlx5_2",
                       .gidIdx = 1,
                       .mmapSize = kSendSize * kTaskPoolSize,
-                      .nbThreads = 3};
+                      .nbThreads = 3,
+                      .serverIpAddr = "13.2.2.2"};
 
     CHECK_RETURN(doca_argp_init("replica_client", &cfg), "init argp");
 

@@ -1,15 +1,13 @@
-#include <cstddef>
-#include <cstdint>
-#include <doca_ctx.h>
-#include <doca_dev.h>
-#include <doca_pe.h>
-#include <vector>
-
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
+#include <doca_ctx.h>
+#include <doca_dev.h>
 #include <doca_mmap.h>
-
+#include <doca_pe.h>
 #include <doca_rdma.h>
+
+#include <cstddef>
+#include <cstdint>
 
 constexpr uint32_t kTaskPoolSize = 32;
 constexpr size_t kBlkSize = 65536;
@@ -40,6 +38,7 @@ struct ReplicaCfg {
     uint32_t gidIdx;
     size_t mmapSize;
     uint16_t nbThreads;
+    char serverIpAddr[1024];
 };
 
 doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &oCtx);

@@ -1,25 +1,33 @@
+#include <doca_buf.h>
+#include <doca_buf_inventory.h>
+#include <doca_ctx.h>
+#include <doca_dev.h>
+#include <doca_erasure_coding.h>
+#include <doca_mmap.h>
+#include <doca_pe.h>
+#include <doca_rdma.h>
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <doca_ctx.h>
-#include <doca_dev.h>
-#include <doca_pe.h>
 #include <vector>
 
-#include <doca_buf.h>
-#include <doca_buf_inventory.h>
-#include <doca_mmap.h>
-
-#include <doca_erasure_coding.h>
-#include <doca_rdma.h>
-
-constexpr uint32_t kNbDataBlks = 128;
-constexpr uint32_t kNbRdncBlks = 32;
+using u32 = uint32_t;
+constexpr size_t kMaxMsgSize = 512 * 1024 * 1024;
+constexpr u32 kNbDataBlks = 128;
+constexpr u32 kNbRdncBlks = 32;
 
 struct alignas(64) ReplicaRscs;
+struct alignas(64) ReplicaCfg;
 struct alignas(64) ReplicaUserData {
     ReplicaRscs &rscs;
-    uint32_t taskId;
+    const ReplicaCfg &cfg;
+    uint32_t stageId;
+};
+
+struct Request {
+    uint64_t ts_ms;
+    uint64_t size;
 };
 
 struct alignas(64) ReplicaRscs {
@@ -68,16 +76,18 @@ struct alignas(64) ReplicaRscs {
     std::vector<std::chrono::high_resolution_clock::time_point> beginTimes;
     std::vector<std::chrono::high_resolution_clock::time_point> endTimes;
     std::vector<double> timeCosts;
+
+    std::vector<Request> requests;
+    std::vector<u32> requestIds;
+    double nbProcessedGBits;
 };
 
 struct alignas(64) ReplicaCfg {
     char ibdevName[1024];
     uint32_t gidIdx;
-    char hostIpAddr[1024];
-    char clientIpAddr[1024];
     uint16_t nbThreads;
-    uint32_t nbTasks;
-    size_t blkSize;
+    uint32_t nbPipelineStages;
+    size_t mmapSize;
 };
 
 doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &oCtx);

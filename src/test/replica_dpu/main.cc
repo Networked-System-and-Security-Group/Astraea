@@ -1,3 +1,8 @@
+#include <doca_argp.h>
+#include <doca_error.h>
+#include <doca_log.h>
+#include <signal.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -6,16 +11,10 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <signal.h>
 #include <thread>
 #include <vector>
 
-#include <doca_argp.h>
-#include <doca_error.h>
-#include <doca_log.h>
-
 #include "common.h"
-#include "rdma.h"
 #include "replica_dpu.h"
 
 DOCA_LOG_REGISTER(REPLICA:DPU : MAIN);
@@ -23,10 +22,6 @@ DOCA_LOG_REGISTER(REPLICA:DPU : MAIN);
 bool gCanStart = false;
 /* Not treating gForceQuit as atomic doesn't matter a lot */
 bool gForceQuit = false;
-
-using TimePoint = std::chrono::high_resolution_clock::time_point;
-
-TimePoint beginTime, endTime;
 
 static void processAndWriteData(const std::vector<std::vector<double>> &data,
                                 const char *path) {
@@ -67,8 +62,7 @@ static void processAndWriteData(const std::vector<std::vector<double>> &data,
         if (file.is_open()) {
             file << "[";
             for (size_t i = 0; i < merged.size(); ++i) {
-                if (i > 0)
-                    file << ", ";
+                if (i > 0) file << ", ";
                 file << merged[i];
             }
             file << "]" << std::endl;
@@ -85,12 +79,12 @@ static doca_error_t ibdevNameCb(void *aIbdevName, void *aCfg) {
     return DOCA_SUCCESS;
 }
 
-static doca_error_t serverIpAddrCb(void *aServerIpAddr, void *aCfg) {
-    size_t ipAddrLen = strlen(static_cast<char *>(aServerIpAddr));
-    memcpy(static_cast<ReplicaCfg *>(aCfg)->hostIpAddr, aServerIpAddr,
-           ipAddrLen);
-    return DOCA_SUCCESS;
-}
+// static doca_error_t serverIpAddrCb(void *aServerIpAddr, void *aCfg) {
+//     size_t ipAddrLen = strlen(static_cast<char *>(aServerIpAddr));
+//     memcpy(static_cast<ReplicaCfg *>(aCfg)->hostIpAddr, aServerIpAddr,
+//            ipAddrLen);
+//     return DOCA_SUCCESS;
+// }
 
 static doca_error_t nbThreadsCb(void *aNbThreads, void *aCfg) {
     static_cast<ReplicaCfg *>(aCfg)->nbThreads =
@@ -99,24 +93,24 @@ static doca_error_t nbThreadsCb(void *aNbThreads, void *aCfg) {
 }
 
 static doca_error_t nbTasksCb(void *aNbTasks, void *aCfg) {
-    static_cast<ReplicaCfg *>(aCfg)->nbTasks =
+    static_cast<ReplicaCfg *>(aCfg)->nbPipelineStages =
         *static_cast<uint16_t *>(aNbTasks);
     return DOCA_SUCCESS;
 }
 
-doca_error_t blkSzCb(void *aBlkSz, void *aCfg) {
-    static_cast<ReplicaCfg *>(aCfg)->blkSize = *static_cast<size_t *>(aBlkSz);
-    return DOCA_SUCCESS;
-}
+// doca_error_t blkSzCb(void *aBlkSz, void *aCfg) {
+//     static_cast<ReplicaCfg *>(aCfg)->blkSize = *static_cast<size_t
+//     *>(aBlkSz); return DOCA_SUCCESS;
+// }
 
 static doca_error_t registerParams(ReplicaCfg &cfg) {
     CHECK_RETURN(
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name cb");
 
-    CHECK_RETURN(registerOneParam("s", "server ip", DOCA_ARGP_TYPE_STRING,
-                                  serverIpAddrCb),
-                 "register server ip address cb");
+    // CHECK_RETURN(registerOneParam("s", "server ip", DOCA_ARGP_TYPE_STRING,
+    //                               serverIpAddrCb),
+    //              "register server ip address cb");
 
     CHECK_RETURN(registerOneParam("nth", "number of threads",
                                   DOCA_ARGP_TYPE_INT, nbThreadsCb),
@@ -124,14 +118,13 @@ static doca_error_t registerParams(ReplicaCfg &cfg) {
     CHECK_RETURN(registerOneParam("ntk", "number of tasks", DOCA_ARGP_TYPE_INT,
                                   nbTasksCb),
                  "register task number cb");
-    CHECK_RETURN(
-        registerOneParam("bs", "block size", DOCA_ARGP_TYPE_INT, blkSzCb),
-        "register block size cb");
+    // CHECK_RETURN(
+    //     registerOneParam("bs", "block size", DOCA_ARGP_TYPE_INT, blkSzCb),
+    //     "register block size cb");
     return DOCA_SUCCESS;
 }
 
 doca_error_t worker(const ReplicaCfg &aCfg, ReplicaRscs &rscs) {
-
     CHECK_RETURN(init(aCfg, rscs), "init app");
 
     while (!gCanStart) {
@@ -148,20 +141,19 @@ static void signalHandler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
         printf("\n\nSignal %d received, preparing to exit...\n", signum);
         gForceQuit = true;
-        endTime = std::chrono::high_resolution_clock::now();
     }
 }
+
+std::chrono::high_resolution_clock::time_point gBeginTime, gEndTime;
 
 int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
-    ReplicaCfg cfg = {.ibdevName = "mlx5_2",
+    ReplicaCfg cfg = {.ibdevName = "mlx5_3",
                       .gidIdx = 1,
-                      .hostIpAddr = "11.5.5.5",
-                      .clientIpAddr = "10.5.5.5",
                       .nbThreads = 3,
-                      .nbTasks = 2,
-                      .blkSize = 65536};
+                      .nbPipelineStages = 4,
+                      .mmapSize = kMaxMsgSize * 2};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
 
@@ -170,8 +162,9 @@ int main(int argc, char **argv) {
     CHECK_RETURN(doca_argp_start(argc, argv), "start argp");
 
     CHECK_RETURN(doca_argp_destroy(), "destroy argp");
-    DOCA_LOG_INFO("Cur config: nbThreads is %u, nbTasks is %u, blkSize is %lu",
-                  cfg.nbThreads, cfg.nbTasks, cfg.blkSize);
+    // DOCA_LOG_INFO("Cur config: nbThreads is %u, nbTasks is %u, blkSize is
+    // %lu",
+    //               cfg.nbThreads, cfg.nbPipelineStages, cfg.blkSize);
 
     const uint16_t basePort = 12345;
     std::vector<ReplicaRscs> rscss;
@@ -180,7 +173,8 @@ int main(int argc, char **argv) {
         ReplicaRscs rscs = {.threadId = i,
                             .nbFinishedTasks = 0,
                             .nbFreedTasks = 0,
-                            .port = portId};
+                            .port = portId,
+                            .nbProcessedGBits = 0};
         rscss.push_back(rscs);
     }
 
@@ -191,10 +185,9 @@ int main(int argc, char **argv) {
 
     DOCA_LOG_INFO("Press enter to run tasks");
     int enter = 0;
-    while (enter != '\r' && enter != '\n')
-        enter = getchar();
+    while (enter != '\r' && enter != '\n') enter = getchar();
     gCanStart = true;
-    beginTime = std::chrono::high_resolution_clock::now();
+    gBeginTime = std::chrono::high_resolution_clock::now();
 
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
@@ -203,6 +196,8 @@ int main(int argc, char **argv) {
     for (std::thread &thread : threads) {
         thread.join();
     }
+
+    gEndTime = std::chrono::high_resolution_clock::now();
 
     std::vector<std::vector<double>> allCosts;
     for (const ReplicaRscs &rscs : rscss) {
@@ -214,14 +209,14 @@ int main(int argc, char **argv) {
     double nbProcessedGBits = 0;
     uint32_t nbOps = 0;
     for (const ReplicaRscs &rscs : rscss) {
-        nbProcessedGBits += static_cast<double>(rscs.nbFinishedTasks) / 1e9 *
-                            kNbDataBlks * cfg.blkSize * 8;
+        nbProcessedGBits +=
+            static_cast<double>(rscs.nbFinishedTasks) / 1e9 * cfg.mmapSize * 8;
         nbOps += rscs.nbFinishedTasks;
     }
 
     const double timeCost =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(endTime -
-                                                             beginTime)
+        std::chrono::duration_cast<std::chrono::nanoseconds>(gEndTime -
+                                                             gBeginTime)
             .count() /
         1e9;
     const double gbps = nbProcessedGBits / timeCost;
