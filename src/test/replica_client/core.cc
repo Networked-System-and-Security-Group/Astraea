@@ -27,6 +27,7 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
                           nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
                           aRscs.rdma, aRscs.ctx),
                  "init rdma");
+
     CHECK_RETURN(
         rdmaConnectToServer(aRscs.dev, aCfg.serverIpAddr, aRscs.port,
                             aRscs.rdma, aRscs.mmap, aRscs.threadId, aRscs.conn),
