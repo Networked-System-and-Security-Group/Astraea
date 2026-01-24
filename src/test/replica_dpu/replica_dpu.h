@@ -13,7 +13,8 @@
 #include <vector>
 
 using u32 = uint32_t;
-constexpr size_t kMaxMsgSize = 512 * 1024 * 1024;
+constexpr size_t kMaxDataSize = 128 * 1024 * 1024;
+constexpr size_t kMinDataSize = 64 * 128;
 constexpr u32 kNbDataBlks = 128;
 constexpr u32 kNbRdncBlks = 32;
 
@@ -49,13 +50,9 @@ struct alignas(64) ReplicaRscs {
     /* Local memory */
     doca_mmap *localMmap;
     void *localMemAddr;
-    std::vector<doca_buf *> recvBufs;
+    std::vector<doca_buf *> dataBufs;
     std::vector<doca_buf *> rdncBufs;
     std::vector<doca_buf *> sendBufs;
-
-    /* Host memory */
-    doca_mmap *hostMmap;
-    std::vector<doca_buf *> hostBufs;
 
     /* Client memory */
     doca_mmap *clientMmap;
