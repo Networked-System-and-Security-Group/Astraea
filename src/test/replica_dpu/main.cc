@@ -79,48 +79,29 @@ static doca_error_t ibdevNameCb(void *aIbdevName, void *aCfg) {
     return DOCA_SUCCESS;
 }
 
-// static doca_error_t serverIpAddrCb(void *aServerIpAddr, void *aCfg) {
-//     size_t ipAddrLen = strlen(static_cast<char *>(aServerIpAddr));
-//     memcpy(static_cast<ReplicaCfg *>(aCfg)->hostIpAddr, aServerIpAddr,
-//            ipAddrLen);
-//     return DOCA_SUCCESS;
-// }
-
 static doca_error_t nbThreadsCb(void *aNbThreads, void *aCfg) {
     static_cast<ReplicaCfg *>(aCfg)->nbThreads =
         *static_cast<uint16_t *>(aNbThreads);
     return DOCA_SUCCESS;
 }
 
-static doca_error_t nbTasksCb(void *aNbTasks, void *aCfg) {
+static doca_error_t nbPipelineStagesCb(void *aNbPipelineStages, void *aCfg) {
     static_cast<ReplicaCfg *>(aCfg)->nbPipelineStages =
-        *static_cast<uint16_t *>(aNbTasks);
+        *static_cast<uint16_t *>(aNbPipelineStages);
     return DOCA_SUCCESS;
 }
-
-// doca_error_t blkSzCb(void *aBlkSz, void *aCfg) {
-//     static_cast<ReplicaCfg *>(aCfg)->blkSize = *static_cast<size_t
-//     *>(aBlkSz); return DOCA_SUCCESS;
-// }
 
 static doca_error_t registerParams(ReplicaCfg &cfg) {
     CHECK_RETURN(
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name cb");
 
-    // CHECK_RETURN(registerOneParam("s", "server ip", DOCA_ARGP_TYPE_STRING,
-    //                               serverIpAddrCb),
-    //              "register server ip address cb");
-
-    CHECK_RETURN(registerOneParam("nth", "number of threads",
-                                  DOCA_ARGP_TYPE_INT, nbThreadsCb),
+    CHECK_RETURN(registerOneParam("t", "number of threads", DOCA_ARGP_TYPE_INT,
+                                  nbThreadsCb),
                  "register threads number cb");
-    CHECK_RETURN(registerOneParam("ntk", "number of tasks", DOCA_ARGP_TYPE_INT,
-                                  nbTasksCb),
+    CHECK_RETURN(registerOneParam("p", "number of pipeline stages",
+                                  DOCA_ARGP_TYPE_INT, nbPipelineStagesCb),
                  "register task number cb");
-    // CHECK_RETURN(
-    //     registerOneParam("bs", "block size", DOCA_ARGP_TYPE_INT, blkSzCb),
-    //     "register block size cb");
     return DOCA_SUCCESS;
 }
 
@@ -137,6 +118,7 @@ doca_error_t worker(const ReplicaCfg &aCfg, ReplicaRscs &rscs) {
     return DOCA_SUCCESS;
 }
 
+std::chrono::high_resolution_clock::time_point gBeginTime, gEndTime;
 static void signalHandler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
         printf("\n\nSignal %d received, preparing to exit...\n", signum);
@@ -144,16 +126,14 @@ static void signalHandler(int signum) {
     }
 }
 
-std::chrono::high_resolution_clock::time_point gBeginTime, gEndTime;
-
 int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
     ReplicaCfg cfg = {.ibdevName = "mlx5_3",
                       .gidIdx = 1,
-                      .nbThreads = 3,
+                      .nbThreads = 1,
                       .nbPipelineStages = 4,
-                      .mmapSize = kMaxMsgSize * 2};
+                      .mmapSize = kMaxDataSize * 2};
 
     CHECK_RETURN(doca_argp_init("replica_dpu", &cfg), "init argp");
 
@@ -162,9 +142,6 @@ int main(int argc, char **argv) {
     CHECK_RETURN(doca_argp_start(argc, argv), "start argp");
 
     CHECK_RETURN(doca_argp_destroy(), "destroy argp");
-    // DOCA_LOG_INFO("Cur config: nbThreads is %u, nbTasks is %u, blkSize is
-    // %lu",
-    //               cfg.nbThreads, cfg.nbPipelineStages, cfg.blkSize);
 
     const uint16_t basePort = 12345;
     std::vector<ReplicaRscs> rscss;
@@ -197,8 +174,6 @@ int main(int argc, char **argv) {
         thread.join();
     }
 
-    gEndTime = std::chrono::high_resolution_clock::now();
-
     std::vector<std::vector<double>> allCosts;
     for (const ReplicaRscs &rscs : rscss) {
         allCosts.push_back(rscs.timeCosts);
@@ -209,10 +184,10 @@ int main(int argc, char **argv) {
     double nbProcessedGBits = 0;
     uint32_t nbOps = 0;
     for (const ReplicaRscs &rscs : rscss) {
-        nbProcessedGBits +=
-            static_cast<double>(rscs.nbFinishedTasks) / 1e9 * cfg.mmapSize * 8;
+        nbProcessedGBits += rscs.nbProcessedGBits;
         nbOps += rscs.nbFinishedTasks;
     }
+    DOCA_LOG_INFO("nb processed gbits is %f", nbProcessedGBits);
 
     const double timeCost =
         std::chrono::duration_cast<std::chrono::nanoseconds>(gEndTime -
@@ -221,7 +196,7 @@ int main(int argc, char **argv) {
         1e9;
     const double gbps = nbProcessedGBits / timeCost;
     const double ops = nbOps / timeCost;
-    DOCA_LOG_INFO("Processed %.0fGb in %fs, throughput is %.2fGbps, ops is %f",
+    DOCA_LOG_INFO("Processed %fGb in %fs, throughput is %fGbps, ops is %f",
                   nbProcessedGBits, timeCost, gbps, ops);
 
     return 0;

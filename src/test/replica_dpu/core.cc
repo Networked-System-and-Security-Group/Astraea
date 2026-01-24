@@ -68,7 +68,7 @@ void ecSuccCb(doca_ec_task_create *task, doca_data task_user_data,
     ReplicaUserData *userData =
         static_cast<ReplicaUserData *>(task_user_data.ptr);
     ReplicaRscs &rscs = userData->rscs;
-    uint32_t stageId = userData->stageId;
+    u32 stageId = userData->stageId;
     if (!gForceQuit) {
         CHECK_LOG(doca_buf_set_data_len(rscs.clientBufs[stageId], 0),
                   "set client buf len to 0");
@@ -80,7 +80,6 @@ void ecSuccCb(doca_ec_task_create *task, doca_data task_user_data,
                       doca_rdma_task_write_as_task(rscs.writeTasks[stageId])),
                   "submit write task in cb");
     } else {
-        // doca_task_free(doca_rdma_task_read_as_task(rscs.readTasks[stageId]));
         doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[stageId]));
         doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[stageId]));
         rscs.nbFreedTasks++;
@@ -92,7 +91,7 @@ void ecErrCb(doca_ec_task_create *task, doca_data task_user_data,
     ReplicaUserData *userData =
         static_cast<ReplicaUserData *>(task_user_data.ptr);
     ReplicaRscs &rscs = userData->rscs;
-    uint32_t stageId = userData->stageId;
+    u32 stageId = userData->stageId;
     gForceQuit = true;
     doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[stageId]));
     doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[stageId]));
@@ -105,12 +104,15 @@ void WriteSuccCb(doca_rdma_task_write *task, doca_data task_user_data,
     ReplicaUserData *userData =
         static_cast<ReplicaUserData *>(task_user_data.ptr);
     ReplicaRscs &rscs = userData->rscs;
-    uint32_t stageId = userData->stageId;
+    u32 stageId = userData->stageId;
     rscs.endTimes.push_back(std::chrono::high_resolution_clock::now());
     if (!gForceQuit) {
         const uint64_t t0 = rscs.requests[stageId].ts_ms;
         u32 &requestId = rscs.requestIds[stageId];
         rscs.nbFinishedTasks++;
+        if (rscs.nbFinishedTasks % 10000 == 0) {
+            DOCA_LOG_INFO("Finished %u tasks", rscs.nbFinishedTasks);
+        }
         rscs.nbProcessedGBits += rscs.requests[requestId].size * 8 / 1e9;
 
         requestId += userData->cfg.nbPipelineStages;
@@ -119,10 +121,25 @@ void WriteSuccCb(doca_rdma_task_write *task, doca_data task_user_data,
             uint64_t rel_ms = (rscs.requests[requestId].ts_ms >= t0)
                                   ? (rscs.requests[requestId].ts_ms - t0)
                                   : 0;
-            auto target = gBeginTime + std::chrono::milliseconds(rel_ms);
+            auto target = gBeginTime + std::chrono::nanoseconds(rel_ms * 100);
             std::this_thread::sleep_until(target);
+
+            size_t rounded = (rscs.requests[rscs.requestIds[stageId]].size +
+                              kMinDataSize - 1) /
+                             kMinDataSize * kMinDataSize;
+
+            //  rounded = rounded > kMaxDataSize ? kMaxDataSize : rounded;
+            if (rounded > kMaxDataSize) {
+                DOCA_LOG_INFO("Fuck");
+            }
+            CHECK_LOG(doca_buf_set_data_len(rscs.dataBufs[stageId], rounded),
+                      "set data buf len");
             CHECK_LOG(doca_buf_set_data_len(rscs.rdncBufs[stageId], 0),
                       "set rdnc buf len to 0");
+
+            rscs.beginTimes.push_back(
+                std::chrono::high_resolution_clock::now());
+
             CHECK_LOG(doca_task_submit(
                           doca_ec_task_create_as_task(rscs.ecTasks[stageId])),
                       "submit ec task in cb");
@@ -144,7 +161,7 @@ void WriteErrCb(doca_rdma_task_write *task, doca_data task_user_data,
     ReplicaUserData *userData =
         static_cast<ReplicaUserData *>(task_user_data.ptr);
     ReplicaRscs &rscs = userData->rscs;
-    uint32_t stageId = userData->stageId;
+    u32 stageId = userData->stageId;
     gForceQuit = true;
     doca_task_free(doca_ec_task_create_as_task(rscs.ecTasks[stageId]));
     doca_task_free(doca_rdma_task_write_as_task(rscs.writeTasks[stageId]));
@@ -161,21 +178,22 @@ static doca_error_t initBufs(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
                                &clientMemAddrSize),
         "get client memory addr");
 
-    constexpr size_t sendSize = kMaxMsgSize / 128 * (128 + 32);
+    constexpr size_t sendSize =
+        kMaxDataSize / kNbDataBlks * (kNbDataBlks + kNbRdncBlks);
 
     char *localMemAddrInChar = static_cast<char *>(aRscs.localMemAddr);
-    for (uint32_t i = 0; i < aCfg.nbPipelineStages; i++) {
+    for (u32 i = 0; i < aCfg.nbPipelineStages; i++) {
         doca_buf *recvBuf, *rdncBuf, *sendBuf, *clientBuf;
         CHECK_RETURN(doca_buf_inventory_buf_get_by_data(
                          aRscs.bufInv, aRscs.localMmap, localMemAddrInChar,
-                         kMaxMsgSize, &recvBuf),
+                         kMaxDataSize, &recvBuf),
                      "get recv buf by addr");
-        aRscs.recvBufs.push_back(recvBuf);
+        aRscs.dataBufs.push_back(recvBuf);
 
         CHECK_RETURN(
-            doca_buf_inventory_buf_get_by_addr(aRscs.bufInv, aRscs.localMmap,
-                                               localMemAddrInChar + kMaxMsgSize,
-                                               kMaxMsgSize, &rdncBuf),
+            doca_buf_inventory_buf_get_by_addr(
+                aRscs.bufInv, aRscs.localMmap,
+                localMemAddrInChar + kMaxDataSize, kMaxDataSize, &rdncBuf),
             "get rdnc buf by addr");
         aRscs.rdncBufs.push_back(rdncBuf);
 
@@ -200,7 +218,7 @@ static void destroyBufs(ReplicaRscs &aRscs) {
                   "dec client buf ref cnt");
     }
 
-    for (doca_buf *&recvBuf : aRscs.recvBufs) {
+    for (doca_buf *&recvBuf : aRscs.dataBufs) {
         CHECK_LOG(doca_buf_dec_refcount(recvBuf, nullptr),
                   "dec recv buf ref cnt");
     }
@@ -217,16 +235,16 @@ static void destroyBufs(ReplicaRscs &aRscs) {
 }
 
 static doca_error_t initTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
-    for (uint32_t i = 0; i < aCfg.nbPipelineStages; i++) {
+    for (u32 i = 0; i < aCfg.nbPipelineStages; i++) {
         ReplicaUserData userData = {.rscs = aRscs, .cfg = aCfg, .stageId = i};
         aRscs.userDatas.push_back(userData);
     }
 
-    for (uint32_t i = 0; i < aCfg.nbPipelineStages; i++) {
+    for (u32 i = 0; i < aCfg.nbPipelineStages; i++) {
         doca_ec_task_create *ecTask;
         CHECK_RETURN(
             doca_ec_task_create_allocate_init(
-                aRscs.ec, aRscs.mat, aRscs.recvBufs[i], aRscs.rdncBufs[i],
+                aRscs.ec, aRscs.mat, aRscs.dataBufs[i], aRscs.rdncBufs[i],
                 {.ptr = &aRscs.userDatas[i]}, &ecTask),
             "alloc and init ec task");
         aRscs.ecTasks.push_back(ecTask);
@@ -243,7 +261,7 @@ static doca_error_t initTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 }
 
 doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
-    aRscs.requests = load_requests_text("./extracted_output.txt");
+    aRscs.requests = load_requests_text("./ali.txt");
     CHECK_RETURN(openDev(aCfg.ibdevName, aRscs.dev), "open device");
 
     CHECK_RETURN(doca_pe_create(&aRscs.pe), "create pe");
@@ -276,17 +294,25 @@ doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 }
 
 void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
-    for (uint32_t i = 0; i < aCfg.nbPipelineStages; i++) {
+    for (u32 i = 0; i < aCfg.nbPipelineStages; i++) {
         aRscs.requestIds.push_back(i);
+        size_t rounded =
+            (aRscs.requests[aRscs.requestIds[i]].size + kMinDataSize - 1) /
+            kMinDataSize * kMinDataSize;
+        rounded = rounded > kMaxDataSize ? kMaxDataSize : rounded;
+        doca_buf_set_data_len(aRscs.dataBufs[i], rounded);
         aRscs.beginTimes.push_back(std::chrono::high_resolution_clock::now());
         CHECK_LOG(
             doca_task_submit(doca_ec_task_create_as_task(aRscs.ecTasks[i])),
             "submit ec task");
     }
 
-    while (!gForceQuit && aRscs.nbFreedTasks < aCfg.nbPipelineStages) {
+    while (aRscs.nbFreedTasks < aCfg.nbPipelineStages) {
         doca_pe_progress(aRscs.pe);
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
+
+    if (aRscs.threadId == 0) {
+        gEndTime = std::chrono::high_resolution_clock::now();
     }
 
     for (u32 i = 0; i < aRscs.nbFinishedTasks; i++) {
@@ -302,7 +328,6 @@ void destroy(ReplicaRscs &aRscs) {
     destroyEc(aRscs.mat, nullptr, aRscs.ec, aRscs.ecCtx);
     destroyRdma(aRscs.rdma, aRscs.rdmaCtx);
     destroyBufs(aRscs);
-    // CHECK_LOG(doca_mmap_destroy(aRscs.hostMmap), "destroy host mmap");
     CHECK_LOG(doca_mmap_destroy(aRscs.clientMmap), "destroy client mmap");
     destroyMemory(aRscs.localMemAddr, aRscs.localMmap, aRscs.bufInv);
     CHECK_LOG(doca_pe_destroy(aRscs.pe), "destroy pe");
