@@ -1,20 +1,17 @@
-#include <chrono>
-#include <cstdint>
-#include <dlfcn.h>
-#include <mutex>
-#include <ratio>
-#include <stop_token>
-#include <sys/mman.h>
+#include "Pe.h"
 
+#include <dlfcn.h>
 #include <doca_error.h>
 #include <doca_log.h>
-
 #include <doca_pe.h>
+
+#include <chrono>
+#include <cstdint>
+#include <mutex>
+#include <stop_token>
 #include <thread>
-#include <unistd.h>
 
 #include "Ctx.h"
-#include "Pe.h"
 #include "common.h"
 #include "original.h"
 #include "shm.h"

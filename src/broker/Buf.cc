@@ -1,13 +1,12 @@
-#include <cstdint>
+#include "Buf.h"
+
+#include <dlfcn.h>
+#include <doca_buf.h>
+#include <doca_buf_inventory.h>
 #include <doca_error.h>
 #include <doca_log.h>
 
-#include <doca_buf.h>
-#include <doca_buf_inventory.h>
-
-#include <dlfcn.h>
-
-#include "Buf.h"
+#include <cstdint>
 
 DOCA_LOG_REGISTER(ASTRAEA : BUF)
 
@@ -34,6 +33,7 @@ doca_error_t (*original_doca_buf_inventory_buf_get_by_args)(
 /* Re-implementations */
 doca_error_t doca_buf_set_data_len(doca_buf *buf, size_t data_len) {
     auto myBuf = reinterpret_cast<Buf *>(buf);
+    myBuf->mDataLen = data_len;
     return original_doca_buf_set_data_len(myBuf->mBuf, data_len);
 }
 
