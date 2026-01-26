@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
 
     ReplicaCfg cfg = {.ibdevName = "mlx5_3",
                       .gidIdx = 1,
-                      .nbThreads = 1,
+                      .nbThreads = 3,
                       .nbPipelineStages = 4,
                       .mmapSize = kMaxDataSize * 2};
 

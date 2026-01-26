@@ -58,7 +58,7 @@ std::vector<Request> load_requests_text(const std::string &path) {
         uint64_t ts = 0, sz = 0;
         if (!(iss >> ts >> sz))
             throw std::runtime_error("bad data line: " + line);
-        events.emplace_back(ts, sz);
+        events.emplace_back(ts, sz * 16);
     }
     return events;
 }
@@ -309,6 +309,7 @@ void runTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 
     while (aRscs.nbFreedTasks < aCfg.nbPipelineStages) {
         doca_pe_progress(aRscs.pe);
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
 
     if (aRscs.threadId == 0) {
