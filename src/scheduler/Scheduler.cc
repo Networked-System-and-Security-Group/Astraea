@@ -1,16 +1,18 @@
 #include "Scheduler.h"
-#include "../broker/shm.h"
+
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
-#include <fcntl.h>
-#include <memory>
-#include <signal.h>
-#include <sys/mman.h>
 #include <thread>
-#include <unistd.h>
+
+#include "../broker/shm.h"
 
 Scheduler::Scheduler() {
     mShmFd = shm_open(kShmName, O_CREAT | O_RDWR, 0666);
@@ -58,29 +60,29 @@ static void signalHandler(int signum) {
 
 static inline size_t increaseGranularity(size_t aPreGranularity) {
     switch (aPreGranularity) {
-    case 2048: {
-        return 4096;
-    }
-    case 4096: {
-        return 8192;
-    }
-    default: {
-        return 8192;
-    }
+        case 2048: {
+            return 4096;
+        }
+        case 4096: {
+            return 8192;
+        }
+        default: {
+            return 8192;
+        }
     }
 }
 
 static inline size_t decreaseGranularity(size_t aPreGranularity) {
     switch (aPreGranularity) {
-    case 8192: {
-        return 4096;
-    }
-    case 4096: {
-        return 2048;
-    }
-    default: {
-        return 2048;
-    }
+        case 8192: {
+            return 4096;
+        }
+        case 4096: {
+            return 2048;
+        }
+        default: {
+            return 2048;
+        }
     }
 }
 

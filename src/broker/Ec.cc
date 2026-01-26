@@ -1,30 +1,26 @@
+#include "Ec.h"
+
+#include <dlfcn.h>
+#include <doca_buf.h>
+#include <doca_buf_inventory.h>
+#include <doca_dev.h>
+#include <doca_erasure_coding.h>
+#include <doca_error.h>
+#include <doca_log.h>
+#include <doca_mmap.h>
+#include <doca_pe.h>
+
 #include <chrono>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <dlfcn.h>
-#include <iostream>
-#include <thread>
-
-#include <doca_dev.h>
-#include <doca_error.h>
-#include <doca_log.h>
-
-#include <doca_pe.h>
-
-#include <doca_buf.h>
-#include <doca_buf_inventory.h>
-#include <doca_mmap.h>
-
-#include <doca_erasure_coding.h>
-#include <ratio>
 #include <vector>
 
 #include "Buf.h"
 #include "Ctx.h"
-#include "Ec.h"
 #include "Pe.h"
 #include "Task.h"
 #include "common.h"
@@ -223,7 +219,6 @@ static inline doca_error_t submitCreateSubTask(Ec *aEc, doca_buf *aSrcBuf,
                                                EcTaskCreate *aRawTask,
                                                u32 aStripId, bool aIsSub,
                                                bool aIsLast, u32 aCost) {
-
     while (true) {
         const auto curTail = aEc->mTail.load(std::memory_order_relaxed);
         const auto nextTail = (curTail + 1) & kTaskQueueMask;
@@ -301,17 +296,17 @@ doca_error_t EcTaskCreate::submit() {
                 }
             }
             doca_buf *subDstBuf = mEc->getPooledDstBuf();
-            submitCreateSubTask(mEc, subSrcBuf, subDstBuf, this, stripId, true,
-                                stripId == nbStrips - 1,
-                                calCreateTimeCostPipeline(mMat->mNbDataBlks,
-                                                          mMat->mNbRdncBlks,
-                                                          granularity));
+            submitCreateSubTask(
+                mEc, subSrcBuf, subDstBuf, this, stripId, true,
+                stripId == nbStrips - 1,
+                calCreateTimeCostPipeline(mMat->mNbDataBlks, mMat->mNbRdncBlks,
+                                          granularity));
         }
     } else {
         CHECK_LOG(submitCreateSubTask(
                       mEc, mSrcBuf->mBuf, mDstBuf->mBuf, this, 0, false, true,
-                      calCreateTimeCostPipeline(
-                          mMat->mNbDataBlks, mMat->mNbRdncBlks, granularity)),
+                      calCreateTimeCostPipeline(mMat->mNbDataBlks,
+                                                mMat->mNbRdncBlks, blkSize)),
                   "submit sub task");
     }
 
@@ -324,7 +319,6 @@ static inline doca_error_t submitRecoverSubTask(Ec *aEc, doca_buf *aSrcBuf,
                                                 EcTaskRecover *aRawTask,
                                                 u32 aStripId, bool aIsSub,
                                                 bool aIsLast, u32 aCost) {
-
     while (true) {
         const auto curTail = aEc->mTail.load(std::memory_order_relaxed);
         const auto nextTail = (curTail + 1) & kTaskQueueMask;
@@ -402,17 +396,17 @@ doca_error_t EcTaskRecover::submit() {
                 }
             }
             doca_buf *subDstBuf = mEc->getPooledDstBuf();
-            submitRecoverSubTask(mEc, subSrcBuf, subDstBuf, this, stripId, true,
-                                 stripId == nbStrips - 1,
-                                 calRecoverTimeCostPipeline(mMat->mNbDataBlks,
-                                                            mMat->mNbRdncBlks,
-                                                            granularity));
+            submitRecoverSubTask(
+                mEc, subSrcBuf, subDstBuf, this, stripId, true,
+                stripId == nbStrips - 1,
+                calRecoverTimeCostPipeline(mMat->mNbDataBlks, mMat->mNbRdncBlks,
+                                           granularity));
         }
     } else {
         CHECK_LOG(submitRecoverSubTask(
                       mEc, mSrcBuf->mBuf, mDstBuf->mBuf, this, 0, false, true,
-                      calRecoverTimeCostPipeline(
-                          mMat->mNbDataBlks, mMat->mNbRdncBlks, granularity)),
+                      calRecoverTimeCostPipeline(mMat->mNbDataBlks,
+                                                 mMat->mNbRdncBlks, blkSize)),
                   "submit sub task");
     }
 
@@ -583,10 +577,10 @@ doca_error_t doca_ec_create(doca_dev *dev, doca_ec **ec) {
                   (*myEc)->mEc, createSubtaskSuccCb, createSubtaskErrCb, 4096),
               "set ec create task conf");
 
-    CHECK_LOG(original_doca_ec_task_recover_set_conf((*myEc)->mEc,
-                                                     recoverSubtaskSuccCb,
-                                                     recoverSubtaskErrCb, 4096),
-              "set ec recover task conf");
+    CHECK_LOG(
+        original_doca_ec_task_recover_set_conf(
+            (*myEc)->mEc, recoverSubtaskSuccCb, recoverSubtaskErrCb, 4096),
+        "set ec recover task conf");
 
     return DOCA_SUCCESS;
 }
