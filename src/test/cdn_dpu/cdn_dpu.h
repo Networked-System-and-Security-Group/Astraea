@@ -17,7 +17,9 @@ constexpr u32 kNbDataBlks = 128;
 constexpr u32 kNbRdncBlks = 32;
 constexpr size_t kMinChunkSize = 128 * 64;
 constexpr size_t kMaxChunkSize = 128 * 1024 * 1024;
-constexpr u32 kMaxNbChunks = 8;  // 1G / 128M = 8
+// Max mmap size is 1GB, 512MB for data buf and 512MB for rdnc buf
+constexpr u32 kMaxNbChunks = 4;
+constexpr u32 kMaxDataSize = kMaxChunkSize * kMaxNbChunks;
 
 struct alignas(64) CdnRscs;
 struct alignas(64) CdnCfg;
@@ -75,6 +77,7 @@ struct alignas(64) CdnRscs {
 
     /* Task resources */
     std::vector<TaskPack> packs;
+    std::vector<bool> pendingWrites;
 
     /* Thread metadata, should init by main thread */
     u32 threadId;

@@ -131,9 +131,9 @@ static void signalHandler(int signum) {
 int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
-    CdnCfg cfg = {.ibdevName = "mlx5_3",
+    CdnCfg cfg = {.ibdevName = "mlx5_2",
                   .gidIdx = 1,
-                  .nbThreads = 1,
+                  .nbThreads = 3,
                   .nbPipelineStages = 4,
                   .nbRequests = 10};
 

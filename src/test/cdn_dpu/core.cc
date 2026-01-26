@@ -43,13 +43,15 @@ static void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
 
     doca_be32_t be_imm = doca_rdma_task_receive_get_result_immediate_data(task);
     u32 imm = ntohl(be_imm);
+    imm = imm > kMaxDataSize ? kMaxDataSize : imm;
 
-    size_t rounded = (imm + kMinChunkSize / 2) / kMinChunkSize * kMinChunkSize;
-    u32 nb_chunks = std::max<size_t>(rounded / kMaxChunkSize, 1);
+    size_t rounded = (imm + kMinChunkSize - 1) / kMinChunkSize * kMinChunkSize;
+    u32 nb_chunks =
+        std::max<size_t>((rounded + kMaxChunkSize - 1) / kMaxChunkSize, 1);
     if (!gForceQuit) {
         doca_buf_set_data_len(rscs.packs[stageId].sendBuf, imm);
         for (u32 i = 0; i < nb_chunks; ++i) {
-            userData->nbChunks = nb_chunks;
+            rscs.packs[stageId].userDatas[i].nbChunks = nb_chunks;
             doca_buf_set_data_len(rscs.packs[stageId].dataBufs[i],
                                   nb_chunks == 1 ? rounded : kMaxChunkSize);
             doca_buf_set_data_len(rscs.packs[stageId].rdncBufs[i], 0);
@@ -75,10 +77,22 @@ static void ecSuccCb(doca_ec_task_recover *task, doca_data task_user_data,
     u32 stageId = userData->stageId;
     if (!gForceQuit) {
         if (userData->chunkId == userData->nbChunks - 1) {
+            if (rscs.recvIds[stageId] < userData->cfg.nbRequests) {
+                CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
+                              rscs.packs[stageId].recvTask)),
+                          "submit receive task in cb");
+            }
+
+            while (!rscs.pendingWrites[stageId]) {
+                doca_pe_progress(rscs.pe);
+                // DOCA_LOG_INFO("In polling, the next request id is %u",
+                //               requestId);
+            }
             doca_buf_set_data_len(rscs.packs[stageId].clientBuf, 0);
             CHECK_LOG(doca_task_submit(doca_rdma_task_write_imm_as_task(
                           rscs.packs[stageId].immTask)),
                       "submit write task in cb");
+            rscs.pendingWrites[stageId] = false;
         }
     } else {
         if (userData->chunkId == userData->nbChunks - 1) {
@@ -104,11 +118,16 @@ static void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
     CdnRscs &rscs = userData->rscs;
     u32 stageId = userData->stageId;
     if (!gForceQuit) {
-        if (rscs.recvIds[stageId] < userData->cfg.nbRequests) {
-            CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
-                          rscs.packs[stageId].recvTask)),
-                      "submit receive task in cb");
-        } else {
+        rscs.pendingWrites[stageId] = true;
+        // if (rscs.recvIds[stageId] < userData->cfg.nbRequests) {
+        //     CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
+        //                   rscs.packs[stageId].recvTask)),
+        //               "submit receive task in cb");
+        // } else {
+        //     freeTasks(rscs, stageId);
+        //     rscs.nbFreedTasks++;
+        // }
+        if (rscs.recvIds[stageId] >= userData->cfg.nbRequests) {
             freeTasks(rscs, stageId);
             rscs.nbFreedTasks++;
         }
@@ -139,31 +158,30 @@ static doca_error_t initBufs(const CdnCfg &aCfg, CdnRscs &aRscs) {
         "get client memory addr");
 
     char *localMemAddrInChar = static_cast<char *>(aRscs.localMemAddr);
-    constexpr size_t dataSize = kMaxChunkSize;
 
     for (u32 i = 0; i < aCfg.nbPipelineStages; ++i) {
         TaskPack &pack = aRscs.packs[i];
-        // Size of send buf and client buf is up to 1GB
+        // Size of send buf and client buf is up to 512MB
         CHECK_RETURN(doca_buf_inventory_buf_get_by_data(
                          aRscs.bufInv, aRscs.localMmap, localMemAddrInChar,
-                         dataSize * kMaxNbChunks, &pack.sendBuf),
+                         kMaxDataSize, &pack.sendBuf),
                      "get send buf by data");
         CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
                          aRscs.bufInv, aRscs.clientMmap, clientMemAddr,
-                         dataSize * kMaxNbChunks, &pack.clientBuf),
+                         kMaxDataSize, &pack.clientBuf),
                      "get client buf by addr");
 
         for (u32 j = 0; j < kMaxNbChunks; ++j) {
             doca_buf *dataBuf, *rdncBuf;
-            CHECK_RETURN(
-                doca_buf_inventory_buf_get_by_data(
-                    aRscs.bufInv, aRscs.localMmap,
-                    localMemAddrInChar + i * 2 * dataSize, dataSize, &dataBuf),
-                "get data buf by data");
+            CHECK_RETURN(doca_buf_inventory_buf_get_by_data(
+                             aRscs.bufInv, aRscs.localMmap,
+                             localMemAddrInChar + j * 2 * kMaxChunkSize,
+                             kMaxChunkSize, &dataBuf),
+                         "get data buf by data");
             CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
                              aRscs.bufInv, aRscs.localMmap,
-                             localMemAddrInChar + (i * 2 + 1) * dataSize,
-                             dataSize, &rdncBuf),
+                             localMemAddrInChar + (j * 2 + 1) * kMaxChunkSize,
+                             kMaxChunkSize, &rdncBuf),
                          "get rdnc buf by addr");
             pack.dataBufs.push_back(dataBuf);
             pack.rdncBufs.push_back(rdncBuf);
@@ -223,7 +241,7 @@ doca_error_t init(const CdnCfg &aCfg, CdnRscs &aRscs) {
 
     CHECK_RETURN(doca_pe_create(&aRscs.pe), "create pe");
 
-    size_t mmapSize = kMaxChunkSize * kMaxNbChunks;
+    size_t mmapSize = kMaxDataSize * 2;
     CHECK_RETURN(initMemory(8192, aRscs.dev, mmapSize, aRscs.localMemAddr,
                             aRscs.localMmap, aRscs.bufInv),
                  "init memory");
@@ -268,6 +286,7 @@ doca_error_t init(const CdnCfg &aCfg, CdnRscs &aRscs) {
 void runTasks(const CdnCfg &aCfg, CdnRscs &aRscs) {
     for (u32 i = 0; i < aCfg.nbPipelineStages; i++) {
         aRscs.recvIds.push_back(i);
+        aRscs.pendingWrites.push_back(true);
         CHECK_LOG(doca_task_submit(
                       doca_rdma_task_receive_as_task(aRscs.packs[i].recvTask)),
                   "submit recv task");
