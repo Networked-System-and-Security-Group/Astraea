@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <iostream>
 #include <thread>
 #include <vector>
 
@@ -15,6 +17,56 @@
 #include "common.h"
 
 DOCA_LOG_REGISTER(CDN:CLIENT : MAIN);
+
+static void processAndWriteData(const std::vector<std::vector<double>> &data,
+                                const char *path) {
+    // 合并所有 vector<double> 到一个 vector 中
+    std::vector<double> merged;
+    for (const auto &vec : data) {
+        merged.insert(merged.end(), vec.begin(), vec.end());
+    }
+
+    // 排序：从小到大
+    std::sort(merged.begin(), merged.end());
+
+    // 计算平均值
+    double sum = 0.0;
+    for (double val : merged) {
+        sum += val;
+    }
+    double average = merged.empty() ? 0.0 : sum / merged.size();
+
+    // 计算 p95 和 p99（百分位数）
+    double p95 = 0.0, p99 = 0.0;
+    if (!merged.empty()) {
+        // 注意：百分位索引从0开始，p95 是第 95% 位置的元素
+        size_t p95_index = static_cast<size_t>((merged.size() - 1) * 0.95);
+        size_t p99_index = static_cast<size_t>((merged.size() - 1) * 0.99);
+        p95 = merged[p95_index];
+        p99 = merged[p99_index];
+    }
+
+    // 输出到终端
+    std::cout << "p99: " << p99 << std::endl;
+    std::cout << "p95: " << p95 << std::endl;
+    std::cout << "average: " << average << std::endl;
+
+    // 如果 path 非空，写入文件
+    if (path != nullptr && path[0] != '\0') {
+        std::ofstream file(path, std::ios::out | std::ios::trunc);
+        if (file.is_open()) {
+            file << "[";
+            for (size_t i = 0; i < merged.size(); ++i) {
+                if (i > 0) file << ", ";
+                file << merged[i];
+            }
+            file << "]" << std::endl;
+            file.close();
+        } else {
+            std::cerr << "无法打开文件: " << path << std::endl;
+        }
+    }
+}
 
 doca_error_t ibdevNameCb(void *aIbdevName, void *aCfg) {
     size_t nameLen = strlen(static_cast<char *>(aIbdevName));
@@ -116,6 +168,13 @@ int main(int argc, char **argv) {
     }
 
     gEndTime = std::chrono::high_resolution_clock::now();
+
+    std::vector<std::vector<double>> allCosts;
+    for (const CdnClientRscs &rscs : rscss) {
+        allCosts.push_back(rscs.timeCosts);
+    }
+
+    processAndWriteData(allCosts, getenv("RES_PATH"));
 
     double nbProcessedGBits = 0;
     for (auto &rscs : rscss) {
