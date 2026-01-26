@@ -32,7 +32,7 @@ static doca_error_t registerParams(ReplicaCfg &cfg) {
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name cb");
 
-    CHECK_RETURN(registerOneParam("nt", "number of threads", DOCA_ARGP_TYPE_INT,
+    CHECK_RETURN(registerOneParam("t", "number of threads", DOCA_ARGP_TYPE_INT,
                                   nbThreadsCb),
                  "register threads number cb");
     return DOCA_SUCCESS;
@@ -60,11 +60,11 @@ doca_error_t worker(const ReplicaCfg &aCfg, ReplicaRscs &rscs) {
 int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
-    ReplicaCfg cfg = {.ibdevName = "mlx5_2",
+    ReplicaCfg cfg = {.ibdevName = "mlx5_3",
                       .gidIdx = 1,
                       .mmapSize = kSendSize * kTaskPoolSize,
-                      .nbThreads = 3,
-                      .serverIpAddr = "13.2.2.2"};
+                      .nbThreads = 1,
+                      .serverIpAddr = "13.13.13.2"};
 
     CHECK_RETURN(doca_argp_init("replica_client", &cfg), "init argp");
 
