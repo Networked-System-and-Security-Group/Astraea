@@ -44,9 +44,8 @@ struct alignas(64) CdnClientRscs {
     std::vector<CdnClientUserData> userDatas;
     std::vector<doca_rdma_task_write_imm *> immTasks;
     std::vector<doca_rdma_task_receive *> recvTasks;
-    std::vector<bool> canWrite;
-
-    bool isFreeded = false;
+    std::vector<bool> canWrites;
+    std::vector<bool> pendingWrites;
 
     /* Thread metadata, should init by main thread */
     u32 threadId;

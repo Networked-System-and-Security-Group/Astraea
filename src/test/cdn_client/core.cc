@@ -75,36 +75,41 @@ void immSuccCb(doca_rdma_task_write_imm *task, doca_data task_user_data,
     u32 stageId = userData->stageId;
 
     if (!gForceQuit) {
-        const uint64_t t0 = rscs.requests[stageId].ts_ms;
-        u32 &requestId = rscs.requestIds[stageId];
-        rscs.nbProcessedGBits += rscs.requests[requestId].size * 8 / 1e9;
+        rscs.pendingWrites[stageId] = true;
+        // const uint64_t t0 = rscs.requests[stageId].ts_ms;
+        // u32 &requestId = rscs.requestIds[stageId];
+        // rscs.nbProcessedGBits += rscs.requests[requestId].size * 8 / 1e9;
 
-        requestId += userData->cfg.nbPipelineStages;
+        // requestId += userData->cfg.nbPipelineStages;
 
-        if (requestId < rscs.requests.size()) {
-            uint64_t rel_ms = (rscs.requests[requestId].ts_ms >= t0)
-                                  ? (rscs.requests[requestId].ts_ms - t0)
-                                  : 0;
-            auto target = gBeginTime + std::chrono::milliseconds(rel_ms);
-            std::this_thread::sleep_until(target);
+        // if (requestId < rscs.requests.size()) {
+        //     uint64_t rel_ms = (rscs.requests[requestId].ts_ms >= t0)
+        //                           ? (rscs.requests[requestId].ts_ms - t0)
+        //                           : 0;
+        //     auto target = gBeginTime + std::chrono::microseconds(rel_ms);
+        //     std::this_thread::sleep_until(target);
 
-            doca_rdma_task_write_imm_set_immediate_data(
-                rscs.immTasks[stageId], htonl(rscs.requests[stageId].size));
+        //     doca_rdma_task_write_imm_set_immediate_data(
+        //         rscs.immTasks[stageId],
+        //         htonl(rscs.requests[requestId].size));
 
-            while (!rscs.canWrite[stageId]) {
-                doca_pe_progress(rscs.pe);
-                // DOCA_LOG_INFO("In polling, the next request id is %u",
-                //               requestId);
-            }
-            CHECK_LOG(doca_task_submit(doca_rdma_task_write_imm_as_task(
-                          rscs.immTasks[stageId])),
-                      "submit write imm task");
-            rscs.canWrite[stageId] = false;
-        } else {
-            doca_task_free(
-                doca_rdma_task_write_imm_as_task(rscs.immTasks[stageId]));
-            rscs.nbFreedTasks++;
-        }
+        //     while (!rscs.canWrites[stageId]) {
+        //         doca_pe_progress(rscs.pe);
+        //         DOCA_LOG_INFO("In polling, the next request id is %u",
+        //                       requestId);
+        //     }
+
+        //     rscs.beginTimes.push_back(
+        //         std::chrono::high_resolution_clock::now());
+        //     CHECK_LOG(doca_task_submit(doca_rdma_task_write_imm_as_task(
+        //                   rscs.immTasks[stageId])),
+        //               "submit write imm task");
+        //     rscs.canWrites[stageId] = false;
+        // } else {
+        //     doca_task_free(
+        //         doca_rdma_task_write_imm_as_task(rscs.immTasks[stageId]));
+        //     rscs.nbFreedTasks++;
+        // }
     } else {
         doca_task_free(
             doca_rdma_task_write_imm_as_task(rscs.immTasks[stageId]));
@@ -135,7 +140,8 @@ void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
     if (!gForceQuit) {
         rscs.nbFinishedTasks++;
         u32 &recvId = rscs.recvIds[stageId];
-        if (recvId % 100 == 0) {
+        rscs.nbProcessedGBits += rscs.requests[recvId].size * 8 / 1e9;
+        if (recvId % 1000 == 0) {
             DOCA_LOG_INFO("Finished %u requests", recvId);
         }
         recvId += userData->cfg.nbPipelineStages;
@@ -145,11 +151,49 @@ void recvSuccCb(doca_rdma_task_receive *task, doca_data task_user_data,
             CHECK_LOG(doca_task_submit(doca_rdma_task_receive_as_task(
                           rscs.recvTasks[stageId])),
                       "submit write imm task");
-            rscs.canWrite[stageId] = true;
+            rscs.canWrites[stageId] = true;
         } else {
             doca_task_free(doca_rdma_task_receive_as_task(task));
             rscs.nbFreedTasks++;
         }
+
+        {
+            const uint64_t t0 = rscs.requests[stageId].ts_ms;
+            u32 &requestId = rscs.requestIds[stageId];
+
+            requestId += userData->cfg.nbPipelineStages;
+
+            if (requestId < rscs.requests.size()) {
+                while (!rscs.pendingWrites[stageId]) {
+                    doca_pe_progress(rscs.pe);
+                    // DOCA_LOG_INFO("In polling, the next request id is %u",
+                    //               requestId);
+                }
+
+                uint64_t rel_ms = (rscs.requests[requestId].ts_ms >= t0)
+                                      ? (rscs.requests[requestId].ts_ms - t0)
+                                      : 0;
+                auto target = gBeginTime + std::chrono::microseconds(rel_ms);
+                std::this_thread::sleep_until(target);
+
+                doca_rdma_task_write_imm_set_immediate_data(
+                    rscs.immTasks[stageId],
+                    htonl(rscs.requests[requestId].size));
+
+                rscs.beginTimes.push_back(
+                    std::chrono::high_resolution_clock::now());
+                CHECK_LOG(doca_task_submit(doca_rdma_task_write_imm_as_task(
+                              rscs.immTasks[stageId])),
+                          "submit write imm task");
+                rscs.canWrites[stageId] = false;
+                rscs.pendingWrites[stageId] = false;
+            } else {
+                doca_task_free(
+                    doca_rdma_task_write_imm_as_task(rscs.immTasks[stageId]));
+                rscs.nbFreedTasks++;
+            }
+        }
+
     } else {
         doca_task_free(doca_rdma_task_receive_as_task(task));
         rscs.nbFreedTasks++;
@@ -246,7 +290,8 @@ void runTasks(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
         aRscs.requestIds.push_back(i);
         aRscs.recvIds.push_back(i);
         aRscs.beginTimes.push_back(std::chrono::high_resolution_clock::now());
-        aRscs.canWrite.push_back(false);
+        aRscs.canWrites.push_back(false);
+        aRscs.pendingWrites.push_back(false);
 
         // Submit recv task before imm task
         doca_task_submit(doca_rdma_task_receive_as_task(aRscs.recvTasks[i]));

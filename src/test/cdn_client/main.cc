@@ -33,7 +33,7 @@ static doca_error_t registerParams(CdnClientCfg &cfg) {
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name cb");
 
-    CHECK_RETURN(registerOneParam("nt", "number of threads", DOCA_ARGP_TYPE_INT,
+    CHECK_RETURN(registerOneParam("t", "number of threads", DOCA_ARGP_TYPE_INT,
                                   nbThreadsCb),
                  "register threads number cb");
     return DOCA_SUCCESS;
@@ -68,11 +68,11 @@ doca_error_t worker(const CdnClientCfg &aCfg, CdnClientRscs &rscs) {
 int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
-    CdnClientCfg cfg = {.ibdevName = "mlx5_3",
+    CdnClientCfg cfg = {.ibdevName = "mlx5_2",
                         .gidIdx = 1,
                         .serverIpAddr = "12.12.12.2",
                         .mmapSize = kMaxMsgSize,
-                        .nbThreads = 1,
+                        .nbThreads = 3,
                         .nbPipelineStages = 4};
 
     CHECK_RETURN(doca_argp_init("cdn_client", &cfg), "init argp");

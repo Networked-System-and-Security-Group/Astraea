@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
     ReplicaCfg cfg = {.ibdevName = "mlx5_3",
                       .gidIdx = 1,
                       .mmapSize = kSendSize * kTaskPoolSize,
-                      .nbThreads = 1,
+                      .nbThreads = 3,
                       .serverIpAddr = "13.13.13.2"};
 
     CHECK_RETURN(doca_argp_init("replica_client", &cfg), "init argp");
