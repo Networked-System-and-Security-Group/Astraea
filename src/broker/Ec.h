@@ -1,18 +1,14 @@
-#ifndef ASTRAEA_EC_H_
-#define ASTRAEA_EC_H_
-#include <cstddef>
-#include <cstdint>
-
-#include <doca_error.h>
-#include <doca_types.h>
-
-#include <doca_pe.h>
+#pragma once
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
-#include <doca_mmap.h>
-
 #include <doca_erasure_coding.h>
+#include <doca_error.h>
+#include <doca_mmap.h>
+#include <doca_pe.h>
+#include <doca_types.h>
+
+#include <cstddef>
 
 #include "Ctx.h"
 #include "Task.h"
@@ -25,11 +21,11 @@ constexpr size_t kBufPoolMask = kBufPoolSize - 1;
 /* Forward declarations */
 namespace astraea {
 class Buf;
-} // namespace astraea
+}  // namespace astraea
 
 namespace astraea {
 class Ec : public Ctx {
-  public:
+   public:
     doca_ec *mEc = nullptr;
     doca_ec_task_create_completion_cb_t mCreateSuccCb = nullptr;
     doca_ec_task_create_completion_cb_t mCreateErrCb = nullptr;
@@ -60,7 +56,7 @@ class Ec : public Ctx {
 };
 
 class Matrix {
-  public:
+   public:
     doca_ec_matrix *mMat = nullptr;
     u32 mNbDataBlks, mNbRdncBlks;
 
@@ -69,7 +65,7 @@ class Matrix {
 };
 
 class EcTaskCreate : public Task {
-  public:
+   public:
     Ec *mEc;
     const Matrix *mMat;
 
@@ -80,7 +76,10 @@ class EcTaskCreate : public Task {
 
     EcTaskCreate(Ec *aEc, const Matrix *aMat, const Buf *aSrcBuf, Buf *aDstBuf,
                  doca_data aUserData)
-        : mEc(aEc), mMat(aMat), mSrcBuf(aSrcBuf), mDstBuf(aDstBuf),
+        : mEc(aEc),
+          mMat(aMat),
+          mSrcBuf(aSrcBuf),
+          mDstBuf(aDstBuf),
           mUserData(aUserData) {}
 
     doca_error_t submit() override;
@@ -88,7 +87,7 @@ class EcTaskCreate : public Task {
 };
 
 class EcTaskRecover : public Task {
-  public:
+   public:
     Ec *mEc;
     const Matrix *mMat;
 
@@ -99,11 +98,13 @@ class EcTaskRecover : public Task {
 
     EcTaskRecover(Ec *aEc, const Matrix *aMat, const Buf *aSrcBuf, Buf *aDstBuf,
                   doca_data aUserData)
-        : mEc(aEc), mMat(aMat), mSrcBuf(aSrcBuf), mDstBuf(aDstBuf),
+        : mEc(aEc),
+          mMat(aMat),
+          mSrcBuf(aSrcBuf),
+          mDstBuf(aDstBuf),
           mUserData(aUserData) {}
     doca_error_t submit() override;
     void free() override;
 };
 
-} // namespace astraea
-#endif
+}  // namespace astraea

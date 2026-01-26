@@ -1,15 +1,12 @@
-#ifndef ORIGINAL_H_
-#define ORIGINAL_H_
-
-#include <doca_dev.h>
-#include <doca_error.h>
-#include <doca_pe.h>
+#pragma once
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
-#include <doca_mmap.h>
-
+#include <doca_dev.h>
 #include <doca_erasure_coding.h>
+#include <doca_error.h>
+#include <doca_mmap.h>
+#include <doca_pe.h>
 #include <doca_rdma.h>
 
 extern doca_error_t (*original_doca_buf_set_data_len)(doca_buf *buf,
@@ -32,5 +29,3 @@ extern doca_error_t (*original_doca_pe_connect_ctx)(doca_pe *pe, doca_ctx *ctx);
 
 extern doca_error_t (*original_doca_task_submit)(doca_task *task);
 extern void (*original_doca_task_free)(doca_task *task);
-
-#endif

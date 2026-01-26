@@ -1,15 +1,12 @@
-#ifndef ASTRAEA_PE_H_
-#define ASTRAEA_PE_H_
+#pragma once
 
-#include <cstdint>
+#include <doca_ctx.h>
+#include <doca_error.h>
+#include <doca_pe.h>
+
 #include <mutex>
 #include <thread>
 #include <vector>
-
-#include <doca_error.h>
-
-#include <doca_ctx.h>
-#include <doca_pe.h>
 
 #include "common.h"
 
@@ -22,7 +19,7 @@ class Ctx;
 namespace astraea {
 
 class Pe {
-  public:
+   public:
     doca_pe *mPe;
     std::vector<Ctx *> mCtxs;
     std::vector<std::mutex *> mLocks;
@@ -31,5 +28,4 @@ class Pe {
     std::vector<u8> mIsStoppeds;
     std::jthread *mWorker = nullptr;
 };
-} // namespace astraea
-#endif
+}  // namespace astraea

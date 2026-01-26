@@ -1,8 +1,10 @@
-#include "common.h"
-#include "shm.h"
-#include <cstdlib>
 #include <fcntl.h>
 #include <sys/mman.h>
+
+#include <cstdlib>
+
+#include "common.h"
+#include "shm.h"
 
 const u32 gSla = atof(getenv("SLA"));
 u32 gShmFd;
@@ -10,7 +12,7 @@ SharedData *gSharedData;
 u32 gAppId;
 
 class Initializer {
-  public:
+   public:
     Initializer() {
         gShmFd = shm_open(kShmName, O_RDWR, 0666);
         gSharedData = static_cast<SharedData *>(

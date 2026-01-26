@@ -1,17 +1,17 @@
-#ifndef __ASTRAEA_RDMA_H__
-#define __ASTRAEA_RDMA_H__
+#pragma once
 
 #include <doca_dev.h>
+#include <doca_error.h>
 #include <doca_log.h>
 #include <doca_pe.h>
-
 #include <doca_rdma.h>
 
 #include "Ctx.h"
+#include "Task.h"
 
 namespace astraea {
 class Rdma : public Ctx {
-  public:
+   public:
     doca_rdma *mRdma = nullptr;
 
     doca_error_t start() override;
@@ -20,11 +20,24 @@ class Rdma : public Ctx {
 };
 
 class RdmaTaskWrite : public Task {
-  public:
+   public:
     doca_rdma_task_write *mTask;
 
     doca_error_t submit() override;
     void free() override;
 };
-} // namespace astraea
-#endif
+
+class RdmaTaskWriteImm : public Task {
+   public:
+    doca_rdma_task_write_imm *mTask;
+    doca_error_t submit() override;
+    void free() override;
+};
+
+class RdmaTaskRecv : public Task {
+   public:
+    doca_rdma_task_receive *mTask;
+    doca_error_t submit() override;
+    void free() override;
+};
+}  // namespace astraea

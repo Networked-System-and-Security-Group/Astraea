@@ -1,10 +1,9 @@
-#include <dlfcn.h>
+#include "Ctx.h"
 
+#include <dlfcn.h>
 #include <doca_ctx.h>
 #include <doca_error.h>
 #include <doca_log.h>
-
-#include "Ctx.h"
 
 using namespace astraea;
 DOCA_LOG_REGISTER(ASTRAEA : CTX)

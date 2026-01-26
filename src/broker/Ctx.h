@@ -1,15 +1,12 @@
-#ifndef ASTRAEA_CTX_H_
-#define ASTRAEA_CTX_H_
+#pragma once
+
+#include <doca_ctx.h>
+#include <doca_error.h>
+#include <doca_pe.h>
 
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include <vector>
-
-#include <doca_error.h>
-
-#include <doca_ctx.h>
-#include <doca_pe.h>
 
 #include "Task.h"
 #include "common.h"
@@ -20,7 +17,7 @@ const u32 kTaskQueueMask = kTaskQueueSize - 1;
 namespace astraea {
 class Pe;
 class Ctx {
-  public:
+   public:
     doca_ctx *mCtx = nullptr;
 
     std::mutex *mLock = nullptr;
@@ -42,5 +39,4 @@ class Ctx {
     virtual doca_error_t stop() = 0;
     virtual doca_error_t connectToPe(Pe *aPe) = 0;
 };
-} // namespace astraea
-#endif
+}  // namespace astraea

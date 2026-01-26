@@ -1,14 +1,11 @@
-#ifndef ASTRAEA_TASK_H_
-#define ASTRAEA_TASK_H_
-
-#include <chrono>
-#include <cstddef>
-#include <doca_error.h>
-#include <doca_types.h>
+#pragma once
 
 #include <doca_buf.h>
-
+#include <doca_error.h>
 #include <doca_pe.h>
+#include <doca_types.h>
+
+#include <chrono>
 
 #include "common.h"
 
@@ -28,7 +25,7 @@ struct UserData {
 };
 
 class Task {
-  public:
+   public:
     doca_task *mTask = nullptr;
     std::chrono::high_resolution_clock::time_point mExpectTime;
 
@@ -37,5 +34,4 @@ class Task {
     virtual doca_error_t submit() = 0;
     virtual void free() = 0;
 };
-} // namespace astraea
-#endif
+}  // namespace astraea

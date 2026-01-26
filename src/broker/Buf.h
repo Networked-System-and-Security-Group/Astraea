@@ -1,5 +1,4 @@
-#ifndef ASTRAEA_BUF_H_
-#define ASTRAEA_BUF_H_
+#pragma once
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
@@ -19,4 +18,3 @@ class Buf {
     size_t mDataLen = 0;
 };
 }  // namespace astraea
-#endif

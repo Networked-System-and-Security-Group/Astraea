@@ -1,17 +1,16 @@
-#include <dlfcn.h>
+#include "Rdma.h"
 
+#include <dlfcn.h>
 #include <doca_buf.h>
 #include <doca_ctx.h>
 #include <doca_dev.h>
 #include <doca_error.h>
 #include <doca_log.h>
 #include <doca_pe.h>
-
 #include <doca_rdma.h>
 
 #include "Buf.h"
 #include "Pe.h"
-#include "Rdma.h"
 #include "common.h"
 #include "original.h"
 
@@ -68,6 +67,26 @@ doca_error_t (*original_doca_rdma_task_write_set_conf)(
         doca_rdma_task_write_completion_cb_t error_task_completion_cb,
         uint32_t num_tasks)>(dlsym(RTLD_NEXT, "doca_rdma_task_write_set_conf"));
 
+doca_error_t (*original_doca_rdma_task_write_imm_set_conf)(
+    doca_rdma *rdma,
+    doca_rdma_task_write_imm_completion_cb_t successful_task_completion_cb,
+    doca_rdma_task_write_imm_completion_cb_t error_task_completion_cb,
+    uint32_t num_tasks) =
+    reinterpret_cast<
+        doca_error_t (*)(doca_rdma *, doca_rdma_task_write_imm_completion_cb_t,
+                         doca_rdma_task_write_imm_completion_cb_t, uint32_t)>(
+        dlsym(RTLD_NEXT, "doca_rdma_task_write_imm_set_conf"));
+
+doca_error_t (*original_doca_rdma_task_receive_set_conf)(
+    doca_rdma *rdma,
+    doca_rdma_task_receive_completion_cb_t successful_task_completion_cb,
+    doca_rdma_task_receive_completion_cb_t error_task_completion_cb,
+    uint32_t num_tasks) =
+    reinterpret_cast<doca_error_t (*)(
+        doca_rdma *rdma, doca_rdma_task_receive_completion_cb_t,
+        doca_rdma_task_receive_completion_cb_t, uint32_t)>(
+        dlsym(RTLD_NEXT, "doca_rdma_task_receive_set_conf"));
+
 doca_ctx *(*original_doca_rdma_as_ctx)(doca_rdma *rdma) =
     reinterpret_cast<doca_ctx *(*)(doca_rdma *)>(dlsym(RTLD_NEXT,
                                                        "doca_rdma_as_ctx"));
@@ -77,6 +96,16 @@ doca_task *(*original_doca_rdma_task_write_as_task)(
     reinterpret_cast<doca_task *(*)(doca_rdma_task_write *)>(
         dlsym(RTLD_NEXT, "doca_rdma_task_write_as_task"));
 
+doca_task *(*original_doca_rdma_task_write_imm_as_task)(
+    doca_rdma_task_write_imm *task) =
+    reinterpret_cast<doca_task *(*)(doca_rdma_task_write_imm *task)>(
+        dlsym(RTLD_NEXT, "doca_rdma_task_write_imm_as_task"));
+
+doca_task *(*original_doca_rdma_task_receive_as_task)(
+    doca_rdma_task_receive *task) =
+    reinterpret_cast<doca_task *(*)(doca_rdma_task_receive *)>(
+        dlsym(RTLD_NEXT, "doca_rdma_task_receive_as_task"));
+
 doca_error_t (*original_doca_rdma_task_write_allocate_init)(
     doca_rdma *, doca_rdma_connection *, const doca_buf *, doca_buf *,
     doca_data, doca_rdma_task_write **) =
@@ -84,6 +113,23 @@ doca_error_t (*original_doca_rdma_task_write_allocate_init)(
                                       const doca_buf *, doca_buf *, doca_data,
                                       doca_rdma_task_write **)>(
         dlsym(RTLD_NEXT, "doca_rdma_task_write_allocate_init"));
+
+doca_error_t (*original_doca_rdma_task_write_imm_allocate_init)(
+    struct doca_rdma *rdma, doca_rdma_connection *rdma_connection,
+    const doca_buf *src_buf, doca_buf *dst_buf, doca_be32_t immediate_data,
+    doca_data user_data, doca_rdma_task_write_imm **task) =
+    reinterpret_cast<doca_error_t (*)(doca_rdma *, doca_rdma_connection *,
+                                      const doca_buf *, doca_buf *, doca_be32_t,
+                                      doca_data, doca_rdma_task_write_imm **)>(
+        dlsym(RTLD_NEXT, "doca_rdma_task_write_imm_allocate_init"));
+
+doca_error_t (*original_doca_rdma_task_receive_allocate_init)(
+    doca_rdma *rdma, doca_buf *dst_buf, doca_data user_data,
+    doca_rdma_task_receive **task) =
+    reinterpret_cast<doca_error_t (*)(doca_rdma *, doca_buf *, doca_data,
+                                      doca_rdma_task_receive **)>(
+        dlsym(RTLD_NEXT, "doca_rdma_task_receive_allocate_init"));
+
 ////////////////////////////////////////////////////////////////////////////////
 doca_error_t Rdma::start() {
     CHECK_LOG(original_doca_ctx_start(mCtx), "start ctx");
@@ -104,8 +150,26 @@ doca_error_t RdmaTaskWrite::submit() {
         original_doca_rdma_task_write_as_task(mTask));
 }
 
+doca_error_t RdmaTaskWriteImm::submit() {
+    return original_doca_task_submit(
+        original_doca_rdma_task_write_imm_as_task(mTask));
+}
+
+doca_error_t RdmaTaskRecv::submit() {
+    return original_doca_task_submit(
+        original_doca_rdma_task_receive_as_task(mTask));
+}
+
 void RdmaTaskWrite::free() {
     original_doca_task_free(original_doca_rdma_task_write_as_task(mTask));
+}
+
+void RdmaTaskWriteImm::free() {
+    original_doca_task_free(original_doca_rdma_task_write_imm_as_task(mTask));
+}
+
+void RdmaTaskRecv::free() {
+    original_doca_task_free(original_doca_rdma_task_receive_as_task(mTask));
 }
 
 doca_error_t doca_rdma_create(doca_dev *dev, doca_rdma **rdma) {
@@ -176,6 +240,28 @@ doca_error_t doca_rdma_task_write_set_conf(
         num_tasks);
 }
 
+doca_error_t doca_rdma_task_write_imm_set_conf(
+    doca_rdma *rdma,
+    doca_rdma_task_write_imm_completion_cb_t successful_task_completion_cb,
+    doca_rdma_task_write_imm_completion_cb_t error_task_completion_cb,
+    uint32_t num_tasks) {
+    auto myRdma = reinterpret_cast<Rdma *>(rdma);
+    return original_doca_rdma_task_write_imm_set_conf(
+        myRdma->mRdma, successful_task_completion_cb, error_task_completion_cb,
+        num_tasks);
+}
+
+doca_error_t doca_rdma_task_receive_set_conf(
+    doca_rdma *rdma,
+    doca_rdma_task_receive_completion_cb_t successful_task_completion_cb,
+    doca_rdma_task_receive_completion_cb_t error_task_completion_cb,
+    uint32_t num_tasks) {
+    auto myRdma = reinterpret_cast<Rdma *>(rdma);
+    return original_doca_rdma_task_receive_set_conf(
+        myRdma->mRdma, successful_task_completion_cb, error_task_completion_cb,
+        num_tasks);
+}
+
 doca_ctx *doca_rdma_as_ctx(doca_rdma *rdma) {
     auto myRdma = reinterpret_cast<Rdma *>(rdma);
     myRdma->mCtx = original_doca_rdma_as_ctx(myRdma->mRdma);
@@ -183,6 +269,14 @@ doca_ctx *doca_rdma_as_ctx(doca_rdma *rdma) {
 }
 
 doca_task *doca_rdma_task_write_as_task(doca_rdma_task_write *task) {
+    return reinterpret_cast<doca_task *>(task);
+}
+
+doca_task *doca_rdma_task_receive_as_task(doca_rdma_task_receive *task) {
+    return reinterpret_cast<doca_task *>(task);
+}
+
+doca_task *doca_rdma_task_write_imm_as_task(doca_rdma_task_write_imm *task) {
     return reinterpret_cast<doca_task *>(task);
 }
 
@@ -200,4 +294,34 @@ doca_error_t doca_rdma_task_write_allocate_init(
     return original_doca_rdma_task_write_allocate_init(
         myRdma->mRdma, rdma_connection, mySrcBuf->mBuf, myDstBuf->mBuf,
         user_data, &(*myTask)->mTask);
+}
+
+doca_error_t doca_rdma_task_write_imm_allocate_init(
+    doca_rdma *rdma, doca_rdma_connection *rdma_connection,
+    const doca_buf *src_buf, doca_buf *dst_buf, doca_be32_t immediate_data,
+    doca_data user_data, doca_rdma_task_write_imm **task) {
+    auto myRdma = reinterpret_cast<Rdma *>(rdma);
+    auto mySrcBuf = reinterpret_cast<const Buf *>(src_buf);
+    auto myDstBuf = reinterpret_cast<Buf *>(dst_buf);
+    auto myTask = reinterpret_cast<RdmaTaskWriteImm **>(task);
+
+    *myTask = new RdmaTaskWriteImm;
+    return original_doca_rdma_task_write_imm_allocate_init(
+        myRdma->mRdma, rdma_connection, mySrcBuf->mBuf, myDstBuf->mBuf,
+        immediate_data, user_data, &(*myTask)->mTask);
+}
+
+doca_error_t doca_rdma_task_receive_allocate_init(
+    doca_rdma *rdma, doca_buf *dst_buf, doca_data user_data,
+    doca_rdma_task_receive **task) {
+    auto myRdma = reinterpret_cast<Rdma *>(rdma);
+    // dst_buf can be nullptr
+    auto myDstBuf = reinterpret_cast<Buf *>(dst_buf);
+    auto myTask = reinterpret_cast<RdmaTaskRecv **>(task);
+
+    *myTask = new RdmaTaskRecv;
+
+    return original_doca_rdma_task_receive_allocate_init(
+        myRdma->mRdma, myDstBuf ? myDstBuf->mBuf : nullptr, user_data,
+        &(*myTask)->mTask);
 }

@@ -1,5 +1,4 @@
-#ifndef ASTRAEA_SHM_H_
-#define ASTRAEA_SHM_H_
+#pragma once
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -25,15 +24,12 @@ struct SharedData {
 };
 
 class LockHelper {
-  public:
+   public:
     void lock(std::atomic_flag &flag) {
-        while (flag.test_and_set(std::memory_order_acquire))
-            ;
+        while (flag.test_and_set(std::memory_order_acquire));
     }
 
     void unlock(std::atomic_flag &flag) {
         flag.clear(std::memory_order_release);
     }
 };
-
-#endif
