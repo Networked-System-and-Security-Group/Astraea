@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <thread>
 
 #include "common.h"
