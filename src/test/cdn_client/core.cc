@@ -6,6 +6,7 @@
 #include <doca_rdma.h>
 #include <netinet/in.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,7 @@ std::vector<Request> load_requests_text(const std::string &path) {
         uint64_t ts = 0, sz = 0;
         if (!(iss >> ts >> sz))
             throw std::runtime_error("bad data line: " + line);
+        sz = std::min<uint64_t>(sz, 128 * 1024 * 1024);
         events.emplace_back(ts, sz);
     }
     return events;
