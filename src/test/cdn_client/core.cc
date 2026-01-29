@@ -31,6 +31,31 @@ DOCA_LOG_REGISTER(CDN:CLIENT : CORE);
 extern bool gForceQuit;
 extern std::chrono::high_resolution_clock::time_point gBeginTime, gEndTime;
 
+double getMedian(std::vector<size_t> vec) {
+    size_t n = vec.size();
+
+    if (n % 2 == 1) {
+        // 1. 奇数个元素：直接找到中间那个
+        size_t mid = n / 2;
+        std::nth_element(vec.begin(), vec.begin() + mid, vec.end());
+        return static_cast<double>(vec[mid]);
+    } else {
+        // 2. 偶数个元素：需要找中间两个值并取平均
+        size_t mid1 = n / 2 - 1;
+        size_t mid2 = n / 2;
+
+        // 找到第 mid2 个位置的元素（并部分排序）
+        std::nth_element(vec.begin(), vec.begin() + mid2, vec.end());
+        size_t v2 = vec[mid2];
+
+        // 找到第 mid1 个位置的最大值
+        std::nth_element(vec.begin(), vec.begin() + mid1, vec.end());
+        size_t v1 = vec[mid1];
+
+        return (static_cast<double>(v1) + static_cast<double>(v2)) / 2.0;
+    }
+}
+
 std::vector<Request> load_requests_text(const std::string &path) {
     std::ifstream ifs{path};
     if (!ifs) throw std::runtime_error("open for read failed: " + path);
@@ -63,9 +88,20 @@ std::vector<Request> load_requests_text(const std::string &path) {
         uint64_t ts = 0, sz = 0;
         if (!(iss >> ts >> sz))
             throw std::runtime_error("bad data line: " + line);
-        sz = std::min<uint64_t>(sz, 128 * 1024 * 1024);
+        sz = std::min<uint64_t>(sz, 16 * 1024 * 1024);
         events.emplace_back(ts, sz);
     }
+    double total = 0;
+    for (size_t i = 0; i < n; ++i) {
+        total += events[i].size / 1024.0;
+    }
+    double avg = total / events.size() * 1024;
+    std::vector<size_t> tmp;
+    for (auto &event : events) {
+        tmp.push_back(event.size);
+    }
+    DOCA_LOG_INFO("avg is %f, median is %f", avg / 1024 / 1024,
+                  getMedian(tmp) / 1024 / 1024);
     return events;
 }
 
