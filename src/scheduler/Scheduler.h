@@ -10,7 +10,7 @@ using u32 = uint32_t;
 constexpr double kEwmaCoef = 0.1;
 constexpr double kReservePortion = 0.7;
 
-constexpr u32 kPeriodIsMs = 10;
+constexpr u32 kPeriodIsMs = 1;
 constexpr u32 kUssPerPeriod = 1000 * kPeriodIsMs;
 constexpr u32 kResvUssPerPeriod = kUssPerPeriod * kReservePortion;
 constexpr u32 kAvailUssPerPeriod = kUssPerPeriod - kResvUssPerPeriod;

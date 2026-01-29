@@ -18,7 +18,7 @@ constexpr u32 kNbRdncBlks = 32;
 constexpr size_t kMinChunkSize = 128 * 64;
 constexpr size_t kMaxChunkSize = 128 * 1024 * 1024;
 // Max mmap size is 1GB, 512MB for data buf and 512MB for rdnc buf
-constexpr u32 kMaxNbChunks = 4;
+constexpr u32 kMaxNbChunks = 1;
 constexpr u32 kMaxDataSize = kMaxChunkSize * kMaxNbChunks;
 
 struct alignas(64) CdnRscs;

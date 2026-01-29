@@ -187,7 +187,6 @@ int main(int argc, char **argv) {
         nbProcessedGBits += rscs.nbProcessedGBits;
         nbOps += rscs.nbFinishedTasks;
     }
-    DOCA_LOG_INFO("nb processed gbits is %f", nbProcessedGBits);
 
     const double timeCost =
         std::chrono::duration_cast<std::chrono::nanoseconds>(gEndTime -
@@ -196,8 +195,9 @@ int main(int argc, char **argv) {
         1e9;
     const double gbps = nbProcessedGBits / timeCost;
     const double ops = nbOps / timeCost;
-    DOCA_LOG_INFO("Processed %fGb in %fs, throughput is %fGbps, ops is %f",
-                  nbProcessedGBits, timeCost, gbps, ops);
+    DOCA_LOG_INFO(
+        "Processed %.2fGb in %.2fs, throughput is %.2fGbps, ops is %.2f",
+        nbProcessedGBits, timeCost, gbps, ops);
 
     return 0;
 }

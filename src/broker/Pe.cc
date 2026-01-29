@@ -79,11 +79,15 @@ static void worker(std::stop_token aToken, Pe *aPe) {
                     u32 &cost = ctx->mTaskCosts[submitPos];
                     u32 &usage = gSharedData->appDatas[gAppId].usage;
                     /* Avoid fragment to improve utilization */
-                    if (availTime > 0 ||
+                    bool haveAvailTime = availTime > 0;
+                    bool nearViolated =
                         ctx->mUserDatas[submitPos].rawTask->mExpectTime -
-                                std::chrono::high_resolution_clock::now() <
-                            std::chrono::microseconds(
-                                static_cast<u32>(gSla * 1.1))) {
+                            std::chrono::high_resolution_clock::now() <
+                        std::chrono::microseconds(static_cast<u32>(gSla * 1.1));
+                    // if (nearViolated) {
+                    //     DOCA_LOG_INFO("near violated");
+                    // }
+                    if (haveAvailTime || nearViolated) {
                         aPe->mLocks[i]->lock();
                         CHECK_LOG(original_doca_task_submit(
                                       ctx->mSubTaskQ[submitPos]),

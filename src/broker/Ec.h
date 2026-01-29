@@ -14,8 +14,8 @@
 #include "Task.h"
 #include "common.h"
 
-constexpr size_t kPerBufSize = 128 * 8192;
-constexpr size_t kBufPoolSize = 32;
+constexpr size_t kPerBufSize = 128 * 32768;
+constexpr size_t kBufPoolSize = 128;
 constexpr size_t kBufPoolMask = kBufPoolSize - 1;
 
 /* Forward declarations */

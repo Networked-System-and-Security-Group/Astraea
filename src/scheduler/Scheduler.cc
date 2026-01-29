@@ -37,7 +37,7 @@ Scheduler::Scheduler() {
         mShmData->appDatas[i].vioLock.clear(std::memory_order_release);
         mShmData->appDatas[i].ecTime = kUssPerPeriod;
         mShmData->appDatas[i].vioTimes = 0;
-        mShmData->appDatas[i].granularity = 4096;
+        mShmData->appDatas[i].granularity = 32768;
         mShmData->appDatas[i].usage = 0;
     }
     ////////////////////////////////////////////////////////////////
@@ -60,28 +60,48 @@ static void signalHandler(int signum) {
 
 static inline size_t increaseGranularity(size_t aPreGranularity) {
     switch (aPreGranularity) {
-        case 2048: {
-            return 4096;
+            // case 2048: {
+            //     return 4096;
+            // }
+            // case 4096: {
+            //     return 8192;
+            // }
+            // default: {
+            //     return 8192;
+            // }
+
+        case 8192: {
+            return 16384;
         }
-        case 4096: {
-            return 8192;
+        case 16384: {
+            return 32768;
         }
         default: {
-            return 8192;
+            return 32768;
         }
     }
 }
 
 static inline size_t decreaseGranularity(size_t aPreGranularity) {
     switch (aPreGranularity) {
-        case 8192: {
-            return 4096;
+            // case 8192: {
+            //     return 4096;
+            // }
+            // case 4096: {
+            //     return 2048;
+            // }
+            // default: {
+            //     return 2048;
+            // }
+
+        case 32768: {
+            return 16384;
         }
-        case 4096: {
-            return 2048;
+        case 16384: {
+            return 8192;
         }
         default: {
-            return 2048;
+            return 8192;
         }
     }
 }

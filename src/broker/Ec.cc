@@ -365,9 +365,17 @@ static inline doca_error_t submitRecoverSubTask(Ec *aEc, doca_buf *aSrcBuf,
 }
 
 doca_error_t EcTaskRecover::submit() {
-    const size_t granularity = gSharedData->appDatas[gAppId].granularity;
+    size_t granularity = gSharedData->appDatas[gAppId].granularity;
     const size_t blkSize = mSrcBuf->mDataLen / mMat->mNbDataBlks;
-    const u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
+    // nbStrips can be 0 if blkSize < granularity
+    u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
+
+    if (nbStrips > kBufPoolSize) {
+        nbStrips = kBufPoolSize;
+        granularity = blkSize / nbStrips;
+        DOCA_LOG_INFO("granularity is %lu, nbStrips is %u", granularity,
+                      nbStrips);
+    }
 
     auto curTime = std::chrono::high_resolution_clock::now();
     mExpectTime = std::chrono::microseconds(gSla) +
@@ -500,7 +508,7 @@ static void recoverSubtaskSuccCb(doca_ec_task_recover *task,
                   "get sub dst len");
         const size_t granularity = subDstLen / rawTask->mMat->mNbRdncBlks;
 
-        for (u32 blkId = 0; blkId < rawTask->mMat->mNbDataBlks; blkId++) {
+        for (u32 blkId = 0; blkId < rawTask->mMat->mNbRdncBlks; blkId++) {
             u8 *subSubdstAddr = originalDstAddr + blkId * blkSize +
                                 granularity * userData->stripId;
             u8 *subSubSrcAddr =
