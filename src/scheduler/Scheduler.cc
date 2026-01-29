@@ -37,7 +37,7 @@ Scheduler::Scheduler() {
         mShmData->appDatas[i].vioLock.clear(std::memory_order_release);
         mShmData->appDatas[i].ecTime = kUssPerPeriod;
         mShmData->appDatas[i].vioTimes = 0;
-        mShmData->appDatas[i].granularity = 32768;
+        mShmData->appDatas[i].granularity = 8192;
         mShmData->appDatas[i].usage = 0;
     }
     ////////////////////////////////////////////////////////////////
