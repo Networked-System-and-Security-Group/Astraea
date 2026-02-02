@@ -87,7 +87,8 @@ static void worker(std::stop_token aToken, Pe *aPe) {
                     // if (nearViolated) {
                     //     DOCA_LOG_INFO("near violated");
                     // }
-                    if (haveAvailTime || nearViolated) {
+                    if (haveAvailTime || nearViolated ||
+                        gSharedData->nbApps == 1) {
                         aPe->mLocks[i]->lock();
                         CHECK_LOG(original_doca_task_submit(
                                       ctx->mSubTaskQ[submitPos]),
