@@ -7,7 +7,7 @@
 #include "../broker/shm.h"
 
 using u32 = uint32_t;
-constexpr double kEwmaCoef = 0.1;
+constexpr double kEwmaCoef = 0.2;
 constexpr double kReservePortion = 0.7;
 
 constexpr u32 kPeriodIsMs = 1;
