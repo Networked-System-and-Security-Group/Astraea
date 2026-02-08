@@ -88,20 +88,9 @@ std::vector<Request> load_requests_text(const std::string &path) {
         uint64_t ts = 0, sz = 0;
         if (!(iss >> ts >> sz))
             throw std::runtime_error("bad data line: " + line);
-        sz = std::min<uint64_t>(sz, 16 * 1024 * 1024);
         events.emplace_back(ts, sz);
     }
-    double total = 0;
-    for (size_t i = 0; i < n; ++i) {
-        total += events[i].size / 1024.0;
-    }
-    double avg = total / events.size() * 1024;
-    std::vector<size_t> tmp;
-    for (auto &event : events) {
-        tmp.push_back(event.size);
-    }
-    DOCA_LOG_INFO("avg is %f, median is %f", avg / 1024 / 1024,
-                  getMedian(tmp) / 1024 / 1024);
+
     return events;
 }
 
