@@ -52,22 +52,18 @@ static doca_error_t memSizeMbCb(void *aVal, void *aCfg) {
 }
 
 static doca_error_t registerParams(HostCfg &aCfg) {
-    CHECK_RETURN(
-        registerOneParam("d", "ibdev name (host side)", DOCA_ARGP_TYPE_STRING,
-                         ibdevNameCb),
-        "register ibdev name");
-    CHECK_RETURN(
-        registerOneParam("s", "DPU server IP address", DOCA_ARGP_TYPE_STRING,
-                         dpuIpCb),
-        "register dpu ip");
-    CHECK_RETURN(
-        registerOneParam("p", "port for mmap descriptor exchange",
-                         DOCA_ARGP_TYPE_INT, portCb),
-        "register port");
-    CHECK_RETURN(
-        registerOneParam("m", "host memory size in MB", DOCA_ARGP_TYPE_INT,
-                         memSizeMbCb),
-        "register mem size");
+    CHECK_RETURN(registerOneParam("d", "ibdev name (host side)",
+                                  DOCA_ARGP_TYPE_STRING, ibdevNameCb),
+                 "register ibdev name");
+    CHECK_RETURN(registerOneParam("s", "DPU server IP address",
+                                  DOCA_ARGP_TYPE_STRING, dpuIpCb),
+                 "register dpu ip");
+    CHECK_RETURN(registerOneParam("p", "port for mmap descriptor exchange",
+                                  DOCA_ARGP_TYPE_INT, portCb),
+                 "register port");
+    CHECK_RETURN(registerOneParam("m", "host memory size in MB",
+                                  DOCA_ARGP_TYPE_INT, memSizeMbCb),
+                 "register mem size");
     return DOCA_SUCCESS;
 }
 
@@ -76,7 +72,7 @@ int main(int argc, char **argv) {
 
     HostCfg cfg = {
         .ibdevName = "mlx5_0",
-        .dpuIp = "192.168.100.1",
+        .dpuIp = "192.168.100.2",
         .port = 22445,
         .memSizeMb = 16,
     };
@@ -108,9 +104,8 @@ int main(int argc, char **argv) {
                  "set mmap range");
     /* PCI_READ_WRITE lets the DPU read (and write) this region via DMA */
     CHECK_RETURN(
-        doca_mmap_set_permissions(
-            mmap, DOCA_ACCESS_FLAG_LOCAL_READ_WRITE |
-                      DOCA_ACCESS_FLAG_PCI_READ_WRITE),
+        doca_mmap_set_permissions(mmap, DOCA_ACCESS_FLAG_LOCAL_READ_WRITE |
+                                            DOCA_ACCESS_FLAG_PCI_READ_WRITE),
         "set mmap permissions");
     CHECK_RETURN(doca_mmap_add_dev(mmap, dev), "add dev to mmap");
     CHECK_RETURN(doca_mmap_start(mmap), "start mmap");

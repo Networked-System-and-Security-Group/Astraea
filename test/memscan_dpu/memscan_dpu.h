@@ -39,6 +39,8 @@ struct alignas(64) MemscanRscs {
 
     u32 nbCompletedInBurst;
     uint16_t port;
+
+    std::vector<double> burstJcts; /* per-burst JCT in microseconds */
 };
 
 struct alignas(64) MemscanCfg {

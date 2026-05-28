@@ -143,6 +143,14 @@ void runTasks(const MemscanCfg &aCfg, MemscanRscs &aRscs) {
         while (aRscs.nbCompletedInBurst < aCfg.nPages) {
             doca_pe_progress(aRscs.pe);
         }
+
+        /* Record JCT: time from first submit to last completion (μs) */
+        double jctUs =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                Clock::now() - burstStart)
+                .count() /
+            1000.0;
+        aRscs.burstJcts.push_back(jctUs);
         nbBursts++;
 
         if (gForceQuit) break;

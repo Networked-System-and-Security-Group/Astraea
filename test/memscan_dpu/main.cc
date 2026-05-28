@@ -3,8 +3,12 @@
 #include <doca_log.h>
 #include <signal.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iostream>
+#include <vector>
 
 #include "common.h"
 #include "memscan_dpu.h"
@@ -12,6 +16,46 @@
 DOCA_LOG_REGISTER(MEMSCAN:DPU : MAIN);
 
 bool gForceQuit = false;
+
+static void printStats(const std::vector<double> &jcts) {
+    if (jcts.empty()) {
+        std::cout << "No bursts completed." << std::endl;
+        return;
+    }
+
+    std::vector<double> sorted = jcts;
+    std::sort(sorted.begin(), sorted.end());
+
+    double sum = 0.0;
+    for (double v : sorted) sum += v;
+    double avg = sum / sorted.size();
+
+    size_t p95idx = static_cast<size_t>((sorted.size() - 1) * 0.95);
+    size_t p99idx = static_cast<size_t>((sorted.size() - 1) * 0.99);
+
+    std::cout << "Bursts:   " << sorted.size() << std::endl;
+    std::cout << "Avg JCT:  " << avg << " us" << std::endl;
+    std::cout << "p95 JCT:  " << sorted[p95idx] << " us" << std::endl;
+    std::cout << "p99 JCT:  " << sorted[p99idx] << " us" << std::endl;
+    std::cout << "Min JCT:  " << sorted.front() << " us" << std::endl;
+    std::cout << "Max JCT:  " << sorted.back() << " us" << std::endl;
+
+    /* Write raw (arrival-order) values to RES_PATH for CDF plotting */
+    const char *path = getenv("RES_PATH");
+    if (path && path[0] != '\0') {
+        std::ofstream f(path, std::ios::out | std::ios::trunc);
+        if (f.is_open()) {
+            f << "[";
+            for (size_t i = 0; i < jcts.size(); ++i) {
+                if (i > 0) f << ", ";
+                f << jcts[i];
+            }
+            f << "]" << std::endl;
+        } else {
+            std::cerr << "Cannot open output file: " << path << std::endl;
+        }
+    }
+}
 
 static void signalHandler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
@@ -113,6 +157,8 @@ int main(int argc, char **argv) {
     }
 
     runTasks(cfg, rscs);
+
+    printStats(rscs.burstJcts);
 
     destroy(rscs);
     return EXIT_SUCCESS;
