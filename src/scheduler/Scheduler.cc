@@ -134,9 +134,12 @@ void Scheduler::schedule() {
                     increaseGranularity(mShmData->appDatas[i].granularity);
             }
 
-            if (mShmData->appDatas[i ^ 1].vioTimes > 3) {
-                mShmData->appDatas[i].granularity =
-                    decreaseGranularity(mShmData->appDatas[i].granularity);
+            for (u32 j = 0; j < mShmData->nbApps; j++) {
+                if (j != i && mShmData->appDatas[j].vioTimes > 3) {
+                    mShmData->appDatas[i].granularity =
+                        decreaseGranularity(mShmData->appDatas[i].granularity);
+                    break;
+                }
             }
         }
 

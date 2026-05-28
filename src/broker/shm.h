@@ -4,7 +4,7 @@
 #include <cstdint>
 
 constexpr char kShmName[] = "/astraea_shm";
-constexpr uint32_t kMaxNbApps = 2;
+constexpr uint32_t kMaxNbApps = 4;
 
 /* The initialization here is actually useless, we perform shared memory
  * initialization in Scheduler */

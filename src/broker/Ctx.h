@@ -21,7 +21,8 @@ class Ctx {
     doca_ctx *mCtx = nullptr;
 
     std::mutex *mLock = nullptr;
-    u8 *mIsStopped = nullptr;
+    Pe *mPe = nullptr;
+    u32 mIsStoppedIdx = 0;
 
     alignas(64) std::atomic<u32> mHead = 0;
     alignas(64) std::atomic<u32> mTail = 0;

@@ -166,7 +166,7 @@ doca_error_t Ec::start() {
 }
 
 doca_error_t Ec::stop() {
-    *mIsStopped = true;
+    mPe->mIsStoppeds[mIsStoppedIdx] = true;
     not_empty_cv.notify_one();
     for (u32 i = 0; i < kBufPoolSize; i++) {
         CHECK_LOG(original_doca_buf_dec_refcount(mDstBufPool[i], nullptr),
@@ -186,7 +186,8 @@ doca_error_t Ec::stop() {
 doca_error_t Ec::connectToPe(Pe *aPe) {
     u32 idx = aPe->mLocks.size();
     aPe->mIsStoppeds.push_back(false);
-    this->mIsStopped = &aPe->mIsStoppeds[idx];
+    this->mPe = aPe;
+    this->mIsStoppedIdx = idx;
 
     aPe->mCtxs.push_back(this);
 

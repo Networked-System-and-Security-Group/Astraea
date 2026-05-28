@@ -16,6 +16,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(doca_common REQUIRED IMPORTED_TARGET doca-common)
 pkg_check_modules(doca_argp   REQUIRED IMPORTED_TARGET doca-argp)
 pkg_check_modules(doca_rdma   REQUIRED IMPORTED_TARGET doca-rdma)
+pkg_check_modules(doca_dma    REQUIRED IMPORTED_TARGET doca-dma)
 pkg_check_modules(doca_ec     REQUIRED IMPORTED_TARGET doca-erasure-coding)
 
 # ---- Common utility library (shared by test apps, profiling, microbenchmark) ----
@@ -33,6 +34,7 @@ target_link_libraries(common_lib PUBLIC
     PkgConfig::doca_common
     PkgConfig::doca_argp
     PkgConfig::doca_rdma
+    PkgConfig::doca_dma
     PkgConfig::doca_ec
 )
 
@@ -68,6 +70,10 @@ target_link_libraries(microbenchmark PRIVATE common_lib)
 # ---- EC profiling ----
 add_executable(ec_prof test/profiling/ec/main.cc)
 target_link_libraries(ec_prof PRIVATE common_lib)
+
+# ---- DMA profiling ----
+add_executable(dma_prof test/profiling/dma/main.cc)
+target_link_libraries(dma_prof PRIVATE common_lib)
 
 # ---- CDN DPU ----
 add_executable(cdn_dpu
