@@ -16,7 +16,7 @@
 #include "common.h"
 #include "socket.h"
 
-DOCA_LOG_REGISTER(COMMON : RDMA);
+DOCA_LOG_REGISTER(COMMON : RDMA)
 
 /* We only set read and write callbacks, extend this function when need */
 doca_error_t initRdma(uint32_t aGidIdx, doca_dev *aDev, doca_pe *aPe,

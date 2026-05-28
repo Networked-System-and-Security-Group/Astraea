@@ -25,6 +25,7 @@ add_library(common_lib STATIC
     test/common/dev.cc
     test/common/log.cc
     test/common/rdma.cc
+    test/common/dma.cc
     test/common/memory.cc
     test/common/socket.cc
     test/common/ec.cc
@@ -44,6 +45,7 @@ add_library(astraea_broker SHARED
     src/broker/Ctx.cc
     src/broker/Ec.cc
     src/broker/Rdma.cc
+    src/broker/Dma.cc
     src/broker/Pe.cc
     src/broker/Task.cc
     src/broker/initialize.cc
@@ -106,3 +108,15 @@ add_executable(replica_client
 )
 target_include_directories(replica_client PRIVATE test/replica_client)
 target_link_libraries(replica_client PRIVATE common_lib)
+
+# ---- MemScan Host ----
+add_executable(memscan_host test/memscan_host/main.cc)
+target_link_libraries(memscan_host PRIVATE common_lib)
+
+# ---- MemScan DPU ----
+add_executable(memscan_dpu
+    test/memscan_dpu/main.cc
+    test/memscan_dpu/core.cc
+)
+target_include_directories(memscan_dpu PRIVATE test/memscan_dpu)
+target_link_libraries(memscan_dpu PRIVATE common_lib)
