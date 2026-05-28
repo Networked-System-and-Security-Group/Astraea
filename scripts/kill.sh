@@ -1,2 +1,2 @@
-pkill -USR1 -f "./build/src/microbenchmark/microbenchmark 8192"
-pkill -USR1 -f "./build/src/microbenchmark/microbenchmark 65536"
+pkill -USR1 -f "./build/microbenchmark 8192"
+pkill -USR1 -f "./build/microbenchmark 65536"

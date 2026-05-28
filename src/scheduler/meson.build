@@ -1,1 +1,0 @@
-executable('scheduler', ['Scheduler.cc', 'main.cc'])

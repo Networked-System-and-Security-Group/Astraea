@@ -7,15 +7,27 @@ Astraea is a fine-grained and lightweight DPU performance isolation framework bu
 1. **BlueField-3 DPU/SuperNIC**
 2. **DOCA 2.9.x LTS** (only 2.9.x versions are supported; 3.x versions are incompatible)
 3. C++ compiler that supports C++20 standard
-4. `meson` and `ninja`
+4. `cmake` (≥ 3.20) and `ninja` (or `make`)
 
 ## Build and Run
 
 ### Build
 
 ```bash
-meson setup build
-meson compile -C build
+cmake -B build -G Ninja
+cmake --build build
+```
+
+All binaries and the shared library are placed directly in `build/`:
+
+```
+build/
+├── libastraea_broker.so   # Astraea Broker (LD_PRELOAD target)
+├── scheduler              # Astraea Scheduler daemon
+├── cdn_dpu / cdn_client
+├── replica_dpu / replica_client
+├── microbenchmark
+└── ec_prof
 ```
 
 ### Run
@@ -27,19 +39,19 @@ meson compile -C build
 source scripts/alias.sh
 
 # Run the scheduler (Astraea Scheduler)
-sc  # taskset -c 7 ./build/src/scheduler/scheduler
+sc  # taskset -c 7 ./build/scheduler
 
 # Run CDN application with Astraea isolation
-ac  # taskset -c 1-3 env LD_PRELOAD=./build/src/broker/libastraea_broker.so SLA=269 ./build/src/test/cdn_dpu/cdn_dpu -r 50000
+ac  # taskset -c 1-3 env LD_PRELOAD=./build/libastraea_broker.so SLA=269 ./build/cdn_dpu -r 50000
 
 # Run Replica application with Astraea isolation
-ar  # taskset -c 4-6 env LD_PRELOAD=./build/src/broker/libastraea_broker.so SLA=1250 ./build/src/test/replica_dpu/replica_dpu
+ar  # taskset -c 4-6 env LD_PRELOAD=./build/libastraea_broker.so SLA=1250 ./build/replica_dpu
 
 # Run native DOCA CDN application (no isolation)
-dc  # taskset -c 1-3 ./build/src/test/cdn_dpu/cdn_dpu -r 50000
+dc  # taskset -c 1-3 ./build/cdn_dpu -r 50000
 
 # Run native DOCA Replica application (no isolation)
-dr  # taskset -c 4-6 ./build/src/test/replica_dpu/replica_dpu
+dr  # taskset -c 4-6 ./build/replica_dpu
 
 # Microbenchmark
 ds  # Small tasks (8KB block)
@@ -52,12 +64,29 @@ ab  # Large tasks with Astraea
 
 ```
 Astraea/
-├── meson.build                 # Project build configuration
+├── CMakeLists.txt              # Project build configuration
 ├── scripts/
 │   ├── alias.sh                # Common command aliases
 │   └── kill.sh                 # Process termination script
-└── src/
-    ├── common/                 # Common utility library
+├── src/
+│   ├── broker/                 # Astraea Broker (AB)
+│   │   │                       # Dynamic library injected via LD_PRELOAD
+│   │   ├── initialize.cc       # Initialization logic (shared memory, app registration)
+│   │   ├── shm.h               # Shared memory data structure definitions
+│   │   ├── Ctx.cc/h            # DOCA Context interception and management
+│   │   ├── Pe.cc/h             # Progress Engine interception
+│   │   ├── Ec.cc/h             # Erasure Coding task interception and splitting
+│   │   ├── Task.cc/h           # Task queue and submission management
+│   │   ├── Buf.cc/h            # Buffer management and zero-copy optimization
+│   │   └── Rdma.cc/h           # RDMA task handling
+│   │
+│   └── scheduler/              # Astraea Scheduler (AS)
+│       │                       # Global scheduling daemon
+│       ├── main.cc             # Scheduler entry point
+│       └── Scheduler.cc/h      # Scheduling algorithm (EWMA prediction, resource allocation, SLA compensation)
+│
+└── test/
+    ├── common/                 # Common utility library (shared by all test apps)
     │   ├── arg.cc              # Command-line argument handling
     │   ├── dev.cc              # DOCA device management
     │   ├── ec.cc/h             # Erasure Coding accelerator wrapper
@@ -65,33 +94,13 @@ Astraea/
     │   ├── rdma.cc/h           # RDMA communication wrapper
     │   └── socket.cc/h         # Socket communication utilities
     │
-    ├── broker/                 # Astraea Broker (AB)
-    │   │                       # Dynamic library injected via LD_PRELOAD
-    │   ├── initialize.cc       # Initialization logic (shared memory, app registration)
-    │   ├── shm.h               # Shared memory data structure definitions
-    │   ├── Ctx.cc/h            # DOCA Context interception and management
-    │   ├── Pe.cc/h             # Progress Engine interception
-    │   ├── Ec.cc/h             # Erasure Coding task interception and splitting
-    │   ├── Task.cc/h           # Task queue and submission management
-    │   ├── Buf.cc/h            # Buffer management and zero-copy optimization
-    │   └── Rdma.cc/h           # RDMA task handling
-    │
-    ├── scheduler/              # Astraea Scheduler (AS)
-    │   │                       # Global scheduling daemon
-    │   ├── main.cc             # Scheduler entry point
-    │   └── Scheduler.cc/h      # Scheduling algorithm (EWMA prediction, resource allocation, SLA compensation)
-    │
-    ├── profiling/              # Offline performance modeling tools
-    │   └── ec/                 # Erasure Coding accelerator profiling
-    │
-    ├── microbenchmark/         # Microbenchmark
-    │   └── main.cc             # EC accelerator latency testing
-    │
-    └── test/                   # Test applications
-        ├── cdn_client/         # CDN client (latency-sensitive application)
-        ├── cdn_dpu/            # CDN DPU-side handler
-        ├── replica_client/     # Replica client (throughput-intensive application)
-        └── replica_dpu/        # Replica DPU-side handler
+    ├── cdn_client/             # CDN client (latency-sensitive application)
+    ├── cdn_dpu/                # CDN DPU-side handler
+    ├── replica_client/         # Replica client (throughput-intensive application)
+    ├── replica_dpu/            # Replica DPU-side handler
+    ├── microbenchmark/         # EC accelerator latency microbenchmark
+    └── profiling/
+        └── ec/                 # Offline EC accelerator performance modeling
 ```
 
 ### Core Components
