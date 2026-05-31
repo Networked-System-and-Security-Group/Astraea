@@ -120,3 +120,15 @@ add_executable(memscan_dpu
 )
 target_include_directories(memscan_dpu PRIVATE test/memscan_dpu)
 target_link_libraries(memscan_dpu PRIVATE common_lib)
+
+# ---- LocalEc Host ----
+add_executable(localec_host test/localec_host/main.cc)
+target_link_libraries(localec_host PRIVATE common_lib)
+
+# ---- LocalEc DPU ----
+add_executable(localec_dpu
+    test/localec_dpu/main.cc
+    test/localec_dpu/core.cc
+)
+target_include_directories(localec_dpu PRIVATE test/localec_dpu)
+target_link_libraries(localec_dpu PRIVATE common_lib)

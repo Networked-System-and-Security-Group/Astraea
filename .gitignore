@@ -3,6 +3,6 @@ build
 *.tex
 *.py
 *.pdf
-*.txt.bak
 *.csv
 logs
+data
