@@ -25,7 +25,10 @@ Scheduler::Scheduler() {
         return;
     }
 
-    for (auto &allocation : mAllocations) {
+    for (auto &allocation : mEcAllocations) {
+        allocation = kUssPerPeriod;
+    }
+    for (auto &allocation : mDmaAllocations) {
         allocation = kUssPerPeriod;
     }
 
@@ -33,12 +36,20 @@ Scheduler::Scheduler() {
     mShmData->nbApps = 0;
     mShmData->nbAppsLock.clear(std::memory_order_release);
     for (u32 i = 0; i < kMaxNbApps; i++) {
-        mShmData->appDatas[i].timeLock.clear(std::memory_order_release);
-        mShmData->appDatas[i].vioLock.clear(std::memory_order_release);
+        mShmData->appDatas[i].ecTimeLock.clear(std::memory_order_release);
+        mShmData->appDatas[i].dmaTimeLock.clear(std::memory_order_release);
+        mShmData->appDatas[i].ecVioLock.clear(std::memory_order_release);
+        mShmData->appDatas[i].dmaVioLock.clear(std::memory_order_release);
         mShmData->appDatas[i].ecTime = kUssPerPeriod;
-        mShmData->appDatas[i].vioTimes = 0;
-        mShmData->appDatas[i].granularity = 8192;
-        mShmData->appDatas[i].usage = 0;
+        mShmData->appDatas[i].dmaTime = kUssPerPeriod;
+        mShmData->appDatas[i].hasEc = 0;
+        mShmData->appDatas[i].hasDma = 0;
+        mShmData->appDatas[i].ecVioTimes = 0;
+        mShmData->appDatas[i].dmaVioTimes = 0;
+        mShmData->appDatas[i].ecGranularity = 8192;
+        mShmData->appDatas[i].dmaGranularity = 8192;
+        mShmData->appDatas[i].ecUsage = 0;
+        mShmData->appDatas[i].dmaUsage = 0;
     }
     ////////////////////////////////////////////////////////////////
 }
@@ -106,57 +117,95 @@ static inline size_t decreaseGranularity(size_t aPreGranularity) {
     }
 }
 
+static void scheduleAccelerator(SharedData *aShmData,
+                                std::array<u32, kMaxNbApps> &aAllocations,
+                                u32 AppData::*aActiveField,
+                                u32 AppData::*aTimeField,
+                                u32 AppData::*aUsageField,
+                                size_t AppData::*aGranularityField,
+                                u32 AppData::*aVioField) {
+    double predictions[kMaxNbApps];
+    double utilizations[kMaxNbApps];
+    double predSum = 0;
+    double vioSum = 0;
+
+    for (u32 i = 0; i < aShmData->nbApps; i++) {
+        if (!(aShmData->appDatas[i].*aActiveField)) {
+            continue;
+        }
+        u32 usage = (aShmData->appDatas[i].*aUsageField);
+        utilizations[i] = usage * 1.0 / aAllocations[i];
+        predictions[i] =
+            kEwmaCoef * usage + (1 - kEwmaCoef) * aAllocations[i];
+        predSum += predictions[i];
+        vioSum += (aShmData->appDatas[i].*aVioField);
+    }
+
+    if (predSum == 0) {
+        return;
+    }
+
+    for (u32 i = 0; i < aShmData->nbApps; i++) {
+        if (!(aShmData->appDatas[i].*aActiveField)) {
+            continue;
+        }
+        if (utilizations[i] < 0.5) {
+            aShmData->appDatas[i].*aGranularityField =
+                increaseGranularity(
+                    aShmData->appDatas[i].*aGranularityField);
+        }
+
+        for (u32 j = 0; j < aShmData->nbApps; j++) {
+            if (!(aShmData->appDatas[j].*aActiveField)) {
+                continue;
+            }
+            if (j != i && (aShmData->appDatas[j].*aVioField) > 3) {
+                aShmData->appDatas[i].*aGranularityField =
+                    decreaseGranularity(
+                        aShmData->appDatas[i].*aGranularityField);
+                break;
+            }
+        }
+    }
+
+    for (u32 i = 0; i < aShmData->nbApps; i++) {
+        if (!(aShmData->appDatas[i].*aActiveField)) {
+            aShmData->appDatas[i].*aTimeField = 0;
+            aShmData->appDatas[i].*aUsageField = 0;
+            aShmData->appDatas[i].*aVioField = 0;
+            continue;
+        }
+        u32 allocation =
+            vioSum == 0
+                ? predictions[i] / predSum * kUssPerPeriod
+                : predictions[i] / predSum * kAvailUssPerPeriod +
+                      (aShmData->appDatas[i].*aVioField) / vioSum *
+                          kResvUssPerPeriod;
+
+        allocation = allocation < 1 ? kUssPerPeriod / 2 : allocation;
+        aAllocations[i] = allocation;
+        aShmData->appDatas[i].*aTimeField = allocation;
+
+        aShmData->appDatas[i].*aVioField = 0;
+        aShmData->appDatas[i].*aUsageField = 0;
+    }
+}
+
 void Scheduler::schedule() {
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
     LockHelper lockHelper;
-    double predictions[kMaxNbApps];
-    double utilizations[kMaxNbApps];
-    double predSum, vioSum;
 
     do {
         lockHelper.lock(mShmData->nbAppsLock);
 
-        predSum = 0;
-        vioSum = 0;
-        for (u32 i = 0; i < mShmData->nbApps; i++) {
-            u32 usage = mShmData->appDatas[i].usage;
-            utilizations[i] = usage * 1.0 / mAllocations[i];
-            predictions[i] =
-                kEwmaCoef * usage + (1 - kEwmaCoef) * mAllocations[i];
-            predSum += predictions[i];
-            vioSum += mShmData->appDatas[i].vioTimes;
-        }
-
-        for (u32 i = 0; i < mShmData->nbApps; i++) {
-            if (utilizations[i] < 0.5) {
-                mShmData->appDatas[i].granularity =
-                    increaseGranularity(mShmData->appDatas[i].granularity);
-            }
-
-            for (u32 j = 0; j < mShmData->nbApps; j++) {
-                if (j != i && mShmData->appDatas[j].vioTimes > 3) {
-                    mShmData->appDatas[i].granularity =
-                        decreaseGranularity(mShmData->appDatas[i].granularity);
-                    break;
-                }
-            }
-        }
-
-        for (u32 i = 0; i < mShmData->nbApps; i++) {
-            u32 allocation =
-                vioSum == 0 ? predictions[i] / predSum * kUssPerPeriod
-                            : predictions[i] / predSum * kAvailUssPerPeriod +
-                                  mShmData->appDatas[i].vioTimes / vioSum *
-                                      kResvUssPerPeriod;
-
-            allocation = allocation < 1 ? kUssPerPeriod / 2 : allocation;
-            mAllocations[i] = allocation;
-            mShmData->appDatas[i].ecTime = allocation;
-
-            mShmData->appDatas[i].vioTimes = 0;
-            mShmData->appDatas[i].usage = 0;
-        }
+        scheduleAccelerator(mShmData, mEcAllocations, &AppData::hasEc,
+                            &AppData::ecTime, &AppData::ecUsage,
+                            &AppData::ecGranularity, &AppData::ecVioTimes);
+        scheduleAccelerator(mShmData, mDmaAllocations, &AppData::hasDma,
+                            &AppData::dmaTime, &AppData::dmaUsage,
+                            &AppData::dmaGranularity,
+                            &AppData::dmaVioTimes);
 
         lockHelper.unlock(mShmData->nbAppsLock);
 

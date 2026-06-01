@@ -10,6 +10,7 @@
 #include <mutex>
 #include <stop_token>
 #include <thread>
+#include <vector>
 
 #include "Ctx.h"
 #include "common.h"
@@ -59,55 +60,73 @@ __attribute__((unused)) static void workerWoSched(std::stop_token aToken,
     }
 }
 
+static std::atomic_flag &timeLockFor(AppData &aAppData, AccelKind aKind) {
+    return aKind == AccelKind::Dma ? aAppData.dmaTimeLock
+                                   : aAppData.ecTimeLock;
+}
+
+static u32 &availTimeFor(AppData &aAppData, AccelKind aKind) {
+    return aKind == AccelKind::Dma ? aAppData.dmaTime : aAppData.ecTime;
+}
+
+static u32 &usageFor(AppData &aAppData, AccelKind aKind) {
+    return aKind == AccelKind::Dma ? aAppData.dmaUsage : aAppData.ecUsage;
+}
+
 static void worker(std::stop_token aToken, Pe *aPe) {
-    u32 submitPos = 0;
+    std::vector<u32> submitPoss;
     LockHelper lockHelper;
     while (!aToken.stop_requested()) {
+        bool didWork = false;
+        if (submitPoss.size() < aPe->mCtxs.size()) {
+            submitPoss.resize(aPe->mCtxs.size(), 0);
+        }
+
         for (u32 i = 0; i < aPe->mLocks.size(); i++) {
-            while (true) {
-                /* Skip the stoppted ctx */
-                if (aPe->mIsStoppeds[i]) {
-                    break;
-                }
-
-                const auto ctx = aPe->mCtxs[i];
-
-                u32 current_tail = ctx->mTail.load(std::memory_order_acquire);
-                if (submitPos != current_tail) {
-                    lockHelper.lock(gSharedData->appDatas[gAppId].timeLock);
-                    u32 &availTime = gSharedData->appDatas[gAppId].ecTime;
-                    u32 &cost = ctx->mTaskCosts[submitPos];
-                    u32 &usage = gSharedData->appDatas[gAppId].usage;
-                    /* Avoid fragment to improve utilization */
-                    bool haveAvailTime = availTime > 0;
-                    bool nearViolated =
-                        ctx->mUserDatas[submitPos].rawTask->mExpectTime -
-                            std::chrono::high_resolution_clock::now() <
-                        std::chrono::microseconds(static_cast<u32>(gSla * 1.1));
-                    // if (nearViolated) {
-                    //     DOCA_LOG_INFO("near violated");
-                    // }
-                    if (haveAvailTime || nearViolated ||
-                        gSharedData->nbApps == 1) {
-                        aPe->mLocks[i]->lock();
-                        CHECK_LOG(original_doca_task_submit(
-                                      ctx->mSubTaskQ[submitPos]),
-                                  "submit subtask");
-                        aPe->mLocks[i]->unlock();
-                        submitPos = (submitPos + 1) & kTaskQueueMask;
-                        availTime = availTime > cost ? availTime - cost : 0;
-                        usage += cost;
-                    }
-                    lockHelper.unlock(gSharedData->appDatas[gAppId].timeLock);
-                } else {
-                    std::unique_lock<std::mutex> lock(ctx->mtx);
-                    ctx->not_empty_cv.wait(lock, [&] {
-                        return submitPos !=
-                                   ctx->mTail.load(std::memory_order_relaxed) ||
-                               aPe->mIsStoppeds[i];
-                    });
-                }
+            /* Skip the stopped ctx */
+            if (aPe->mIsStoppeds[i]) {
+                continue;
             }
+
+            const auto ctx = aPe->mCtxs[i];
+            u32 &submitPos = submitPoss[i];
+
+            u32 currentTail = ctx->mTail.load(std::memory_order_acquire);
+            if (submitPos == currentTail) {
+                continue;
+            }
+
+            AppData &appData = gSharedData->appDatas[gAppId];
+            auto &timeLock = timeLockFor(appData, ctx->mAccelKind);
+            lockHelper.lock(timeLock);
+
+            u32 &availTime = availTimeFor(appData, ctx->mAccelKind);
+            u32 &cost = ctx->mTaskCosts[submitPos];
+            u32 &usage = usageFor(appData, ctx->mAccelKind);
+            /* Avoid fragment to improve utilization */
+            bool haveAvailTime = availTime > 0;
+            bool nearViolated =
+                ctx->mUserDatas[submitPos].rawTask->mExpectTime -
+                    std::chrono::high_resolution_clock::now() <
+                std::chrono::microseconds(static_cast<u32>(gSla * 1.1));
+            // if (nearViolated) {
+            //     DOCA_LOG_INFO("near violated");
+            // }
+            if (haveAvailTime || nearViolated || gSharedData->nbApps == 1) {
+                aPe->mLocks[i]->lock();
+                CHECK_LOG(original_doca_task_submit(ctx->mSubTaskQ[submitPos]),
+                          "submit subtask");
+                aPe->mLocks[i]->unlock();
+                submitPos = (submitPos + 1) & kTaskQueueMask;
+                availTime = availTime > cost ? availTime - cost : 0;
+                usage += cost;
+                didWork = true;
+            }
+            lockHelper.unlock(timeLock);
+        }
+
+        if (!didWork) {
+            std::this_thread::sleep_for(std::chrono::microseconds(1));
         }
     }
 }

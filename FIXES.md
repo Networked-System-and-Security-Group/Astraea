@@ -12,6 +12,9 @@
 | 2 | 调度器 `i ^ 1` 改为遍历所有其他 app 的 vioTimes | `src/scheduler/Scheduler.cc:137` |
 | 6 | `Ec::connectToPe` 悬空指针：`mIsStopped` 改为 `mPe` + `mIsStoppedIdx` | `src/broker/Ctx.h`, `src/broker/Ec.cc:168,186` |
 | 7 | `getenv("SLA")` 无 null 检查改为 Initializer 内检查，失败则 exit | `src/broker/initialize.cc`, `src/broker/common.h:15` |
+| 21 | DMA profiling 工具已存在并可构建，原待办过期 | `test/profiling/dma/main.cc`, `CMakeLists.txt` |
+| 22 | DMA broker wrapper 从空实现补齐为可拆分、可调度实现，并加入 per-accelerator 配额 | `src/broker/Dma.*`, `src/broker/Pe.cc`, `src/broker/shm.h`, `src/scheduler/Scheduler.*`, `CMakeLists.txt` |
+| 23 | EC create 拆分未限制 dst buffer pool 且未写入 `stripId`，可能导致 copy-back 错误 | `src/broker/Ec.cc` |
 
 ---
 
@@ -134,10 +137,17 @@
   alias ar="taskset -c 4-6 env LD_PRELOAD=./build/src/broker/libastraea_broker.so SLA=$SLA_REPLICA ./build/src/test/replica_dpu/replica_dpu"
   ```
 
-### #21 缺少 DMA profiling 工具
+### #24 `Buf` wrapper 缺少 data pointer 元数据
 
-- **问题**：`src/profiling/` 目前只有 `ec/`，CLAUDE.md 实验5需要 DMA profiling microbenchmark 来标定 DMA cost model 参数（类比 EC profiling）
-- **新增文件**：`src/profiling/dma/main.cc` + `src/profiling/dma/meson.build`（等 memscan 应用实现后再做，复用 DMA 相关代码）
+- **文件**：`src/broker/Buf.h`, `src/broker/Buf.cc`
+- **问题**：wrapper 只记录 `mAddr` 和 `mDataLen`，没有记录 DOCA buf 的 data pointer。当前 DMA 拆分假设测试代码里的 data 与 head 对齐；如果未来应用使用 `doca_buf_set_data()` 或 `buf_get_by_args()` 让 data != head，DMA 子任务切片会从错误地址开始。
+- **修改方向**：在 `Buf` 中增加 `mData`，在 `doca_buf_inventory_buf_get_by_args()`、`doca_buf_set_data()`、`doca_buf_set_data_len()` wrapper 中同步维护。
+
+### #25 EC 子任务完成回调用 `isLast` 判断原任务完成，可能受 completion 乱序影响
+
+- **文件**：`src/broker/Ec.cc:createSubtaskSuccCb`, `src/broker/Ec.cc:recoverSubtaskSuccCb`
+- **问题**：当前最后提交的子任务完成时就触发用户 callback。如果 DOCA completion 顺序不严格等于提交顺序，可能在其他子任务尚未完成时提前触发原任务完成。
+- **修改方向**：仿照 DMA 新实现，在 `EcTaskCreate` / `EcTaskRecover` 中维护完成计数，计数达到 `nbStrips` 时再触发用户 callback。
 
 ---
 

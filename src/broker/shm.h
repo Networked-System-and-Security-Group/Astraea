@@ -10,11 +10,19 @@ constexpr uint32_t kMaxNbApps = 4;
  * initialization in Scheduler */
 struct AppData {
     alignas(64) uint32_t ecTime = 0;
-    alignas(64) uint32_t usage = 0;
-    alignas(64) size_t granularity = 4096;
-    alignas(64) uint32_t vioTimes = 0;
-    alignas(64) std::atomic_flag timeLock = ATOMIC_FLAG_INIT;
-    alignas(64) std::atomic_flag vioLock = ATOMIC_FLAG_INIT;
+    alignas(64) uint32_t dmaTime = 0;
+    alignas(64) uint32_t hasEc = 0;
+    alignas(64) uint32_t hasDma = 0;
+    alignas(64) uint32_t ecUsage = 0;
+    alignas(64) uint32_t dmaUsage = 0;
+    alignas(64) size_t ecGranularity = 4096;
+    alignas(64) size_t dmaGranularity = 4096;
+    alignas(64) uint32_t ecVioTimes = 0;
+    alignas(64) uint32_t dmaVioTimes = 0;
+    alignas(64) std::atomic_flag ecTimeLock = ATOMIC_FLAG_INIT;
+    alignas(64) std::atomic_flag dmaTimeLock = ATOMIC_FLAG_INIT;
+    alignas(64) std::atomic_flag ecVioLock = ATOMIC_FLAG_INIT;
+    alignas(64) std::atomic_flag dmaVioLock = ATOMIC_FLAG_INIT;
 };
 
 struct SharedData {

@@ -2,6 +2,7 @@
 
 #include <dlfcn.h>
 #include <doca_buf.h>
+#include <doca_buf_inventory.h>
 #include <doca_ctx.h>
 #include <doca_dev.h>
 #include <doca_dma.h>
@@ -9,10 +10,21 @@
 #include <doca_log.h>
 #include <doca_pe.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
+
 #include "Buf.h"
+#include "Ctx.h"
 #include "Pe.h"
+#include "Task.h"
 #include "common.h"
+#include "doca_types.h"
 #include "original.h"
+#include "shm.h"
 
 DOCA_LOG_REGISTER(ASTRAEA : DMA)
 
@@ -52,33 +64,241 @@ doca_error_t (*original_doca_dma_task_memcpy_alloc_init)(
                                       doca_data, doca_dma_task_memcpy **)>(
         dlsym(RTLD_NEXT, "doca_dma_task_memcpy_alloc_init"));
 ////////////////////////////////////////////////////////////////////////////////
+
+static doca_error_t submitNextMemcpySubTask(DmaTaskMemcpy *aRawTask);
+
 doca_error_t Dma::start() {
     CHECK_LOG(original_doca_ctx_start(mCtx), "start ctx");
     return DOCA_SUCCESS;
 }
 
-doca_error_t Dma::stop() { return original_doca_ctx_stop(mCtx); }
+doca_error_t Dma::stop() {
+    if (mPe) {
+        mPe->mIsStoppeds[mIsStoppedIdx] = true;
+        not_empty_cv.notify_one();
+    }
+    return original_doca_ctx_stop(mCtx);
+}
 
 doca_error_t Dma::connectToPe(Pe *aPe) {
+    u32 idx = aPe->mLocks.size();
+    aPe->mIsStoppeds.push_back(false);
+    this->mPe = aPe;
+    this->mIsStoppedIdx = idx;
+    gSharedData->appDatas[gAppId].hasDma = 1;
+
+    aPe->mCtxs.push_back(this);
+
+    auto lock = new std::mutex;
+    this->mLock = lock;
+    aPe->mLocks.push_back(lock);
+
     CHECK_RETURN(original_doca_pe_connect_ctx(aPe->mPe, this->mCtx),
                  "connect pe to ctx");
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t DmaTaskMemcpy::submit() {
-    return original_doca_task_submit(
-        original_doca_dma_task_memcpy_as_task(mTask));
+static u32 calMemcpyTimeCostPipeline(size_t aSize) {
+    constexpr double kInterceptUs = 0.743571;
+    constexpr double kSlopeUsPerByte = 0.000042000443;
+    double cost = kInterceptUs + kSlopeUsPerByte * aSize;
+    return static_cast<u32>(std::max(1.0, std::ceil(cost)));
 }
 
-void DmaTaskMemcpy::free() {
-    original_doca_task_free(original_doca_dma_task_memcpy_as_task(mTask));
+static void advanceDmaQueue(Dma *aDma) {
+    uint32_t currentTail = aDma->mTail.load(std::memory_order_acquire);
+    const auto currentHead = aDma->mHead.load(std::memory_order_relaxed);
+    aDma->mHead.store((currentHead + 1) & kTaskQueueMask,
+                      std::memory_order_release);
+    if (((currentTail + 1) & kTaskQueueMask) == currentHead) {
+        aDma->not_full_cv.notify_one();
+    }
+}
+
+static inline doca_error_t submitMemcpySubTask(Dma *aDma, doca_buf *aSrcBuf,
+                                               doca_buf *aDstBuf,
+                                               DmaTaskMemcpy *aRawTask,
+                                               u32 aSubtaskId, bool aIsSub,
+                                               u32 aCost) {
+    while (true) {
+        const auto curTail = aDma->mTail.load(std::memory_order_relaxed);
+        const auto nextTail = (curTail + 1) & kTaskQueueMask;
+        const auto currentHead = aDma->mHead.load(std::memory_order_acquire);
+
+        if (nextTail != currentHead) {
+            UserData &userData = aDma->mUserDatas[curTail];
+
+            userData.rawData = aRawTask->mUserData;
+            userData.rawTask = aRawTask;
+            userData.srcBuf = aSrcBuf;
+            userData.dstBuf = aDstBuf;
+            userData.isLast = aSubtaskId == aRawTask->mNbSubtasks - 1;
+            userData.isSub = aIsSub;
+            userData.stripId = aSubtaskId;
+
+            doca_dma_task_memcpy *specTask = nullptr;
+            CHECK_RETURN(original_doca_dma_task_memcpy_alloc_init(
+                             aDma->mDma, aSrcBuf, aDstBuf, {.ptr = &userData},
+                             &specTask),
+                         "alloc dma memcpy subtask");
+            aDma->mSubTaskQ[curTail] =
+                original_doca_dma_task_memcpy_as_task(specTask);
+
+            aDma->mTaskCosts[curTail] = aCost;
+            aDma->mTail.store(nextTail, std::memory_order_release);
+            aDma->not_empty_cv.notify_one();
+
+            break;
+        } else {
+            std::unique_lock<std::mutex> lock(aDma->mtx);
+            aDma->not_full_cv.wait(lock, [&] {
+                return ((aDma->mTail.load(std::memory_order_relaxed) + 1) &
+                        kTaskQueueMask) !=
+                       aDma->mHead.load(std::memory_order_relaxed);
+            });
+        }
+    }
+
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t submitNextMemcpySubTask(DmaTaskMemcpy *aRawTask) {
+    const u32 subtaskId = aRawTask->mNextSubtaskId++;
+    const size_t offset = subtaskId * aRawTask->mSubtaskLen;
+    const size_t chunkLen =
+        std::min(aRawTask->mSubtaskLen, aRawTask->mDataLen - offset);
+    bool isSub = aRawTask->mNbSubtasks > 1;
+
+    doca_buf *srcBuf = nullptr;
+    doca_buf *dstBuf = nullptr;
+    if (isSub) {
+        auto srcAddr = static_cast<u8 *>(aRawTask->mSrcBuf->mAddr) + offset;
+        auto dstAddr = static_cast<u8 *>(aRawTask->mDstBuf->mAddr) + offset;
+        CHECK_RETURN(original_doca_buf_inventory_buf_get_by_args(
+                         aRawTask->mSrcBuf->mInv, aRawTask->mSrcBuf->mMmap,
+                         srcAddr, chunkLen, srcAddr, chunkLen, &srcBuf),
+                     "alloc dma sub src buf");
+        CHECK_RETURN(original_doca_buf_inventory_buf_get_by_args(
+                         aRawTask->mDstBuf->mInv, aRawTask->mDstBuf->mMmap,
+                         dstAddr, chunkLen, dstAddr, 0, &dstBuf),
+                     "alloc dma sub dst buf");
+    } else {
+        srcBuf = aRawTask->mSrcBuf->mBuf;
+        dstBuf = aRawTask->mDstBuf->mBuf;
+    }
+
+    return submitMemcpySubTask(aRawTask->mDma, srcBuf, dstBuf, aRawTask,
+                               subtaskId, isSub,
+                               calMemcpyTimeCostPipeline(chunkLen));
+}
+
+doca_error_t DmaTaskMemcpy::submit() {
+    mDataLen = mSrcBuf->mDataLen;
+    size_t granularity = gSharedData->appDatas[gAppId].dmaGranularity;
+    if (granularity == 0) {
+        granularity = mDataLen == 0 ? 1 : mDataLen;
+    }
+
+    mNbSubtasks =
+        gSharedData->nbApps > 1
+            ? static_cast<u32>((mDataLen + granularity - 1) / granularity)
+            : 1;
+    if (mNbSubtasks == 0) {
+        mNbSubtasks = 1;
+    }
+    mSubtaskLen =
+        mNbSubtasks == 1 ? mDataLen : (mDataLen + mNbSubtasks - 1) / mNbSubtasks;
+    mNextSubtaskId = 0;
+    mNbCompleted.store(0, std::memory_order_release);
+    mHasError.store(false, std::memory_order_release);
+
+    auto curTime = std::chrono::high_resolution_clock::now();
+    mExpectTime = curTime + std::chrono::microseconds(gSla);
+
+    return submitNextMemcpySubTask(this);
+}
+
+void DmaTaskMemcpy::free() {}
+
+static void memcpySubtaskComplete(doca_dma_task_memcpy *task,
+                                  doca_data task_user_data,
+                                  doca_data ctx_user_data, bool aHasError) {
+    UserData *userData = static_cast<UserData *>(task_user_data.ptr);
+    DmaTaskMemcpy *rawTask =
+        static_cast<DmaTaskMemcpy *>(userData->rawTask);
+
+    if (userData->isSub) {
+        CHECK_LOG(original_doca_buf_dec_refcount(userData->srcBuf, nullptr),
+                  "destroy dma sub src buf");
+        CHECK_LOG(original_doca_buf_dec_refcount(userData->dstBuf, nullptr),
+                  "destroy dma sub dst buf");
+    }
+    original_doca_task_free(original_doca_dma_task_memcpy_as_task(task));
+
+    if (aHasError) {
+        rawTask->mHasError.store(true, std::memory_order_release);
+    }
+
+    Dma *dma = rawTask->mDma;
+    const bool isDone =
+        aHasError || userData->isLast ||
+        rawTask->mNbCompleted.fetch_add(1, std::memory_order_acq_rel) + 1 ==
+            rawTask->mNbSubtasks;
+    advanceDmaQueue(dma);
+
+    if (!isDone) {
+        CHECK_LOG(submitNextMemcpySubTask(rawTask), "submit next dma subtask");
+        return;
+    }
+
+    const bool hasError = rawTask->mHasError.load(std::memory_order_acquire);
+    if (hasError) {
+        if (rawTask->mDma->mMemcpyErrCb) {
+            rawTask->mDma->mMemcpyErrCb(
+                reinterpret_cast<doca_dma_task_memcpy *>(rawTask),
+                userData->rawData, ctx_user_data);
+        }
+    } else {
+        rawTask->mDstBuf->mDataLen = rawTask->mDataLen;
+        CHECK_LOG(original_doca_buf_set_data_len(rawTask->mDstBuf->mBuf,
+                                                 rawTask->mDataLen),
+                  "set raw dma dst len");
+
+        auto curTime = std::chrono::high_resolution_clock::now();
+        if (curTime > rawTask->mExpectTime) {
+            LockHelper lockHelper;
+            lockHelper.lock(gSharedData->appDatas[gAppId].dmaVioLock);
+            gSharedData->appDatas[gAppId].dmaVioTimes++;
+            lockHelper.unlock(gSharedData->appDatas[gAppId].dmaVioLock);
+        }
+
+        if (rawTask->mDma->mMemcpySuccCb) {
+            rawTask->mDma->mMemcpySuccCb(
+                reinterpret_cast<doca_dma_task_memcpy *>(rawTask),
+                userData->rawData, ctx_user_data);
+        }
+    }
+}
+
+static void memcpySubtaskSuccCb(doca_dma_task_memcpy *task,
+                                doca_data task_user_data,
+                                doca_data ctx_user_data) {
+    memcpySubtaskComplete(task, task_user_data, ctx_user_data, false);
+}
+
+static void memcpySubtaskErrCb(doca_dma_task_memcpy *task,
+                               doca_data task_user_data,
+                               doca_data ctx_user_data) {
+    DOCA_LOG_ERR("DMA memcpy subtask failed");
+    memcpySubtaskComplete(task, task_user_data, ctx_user_data, true);
 }
 
 doca_error_t doca_dma_create(doca_dev *dev, doca_dma **dma) {
     auto myDma = reinterpret_cast<Dma **>(dma);
 
     *myDma = new Dma;
+    (*myDma)->mAccelKind = AccelKind::Dma;
 
     CHECK_LOG(original_doca_dma_create(dev, &(*myDma)->mDma), "create dma");
 
@@ -100,8 +320,11 @@ doca_error_t doca_dma_task_memcpy_set_conf(
     doca_dma_task_memcpy_completion_cb_t task_error_cb,
     uint32_t num_memcpy_tasks) {
     auto myDma = reinterpret_cast<Dma *>(dma);
+    myDma->mMemcpySuccCb = task_completion_cb;
+    myDma->mMemcpyErrCb = task_error_cb;
     return original_doca_dma_task_memcpy_set_conf(
-        myDma->mDma, task_completion_cb, task_error_cb, num_memcpy_tasks);
+        myDma->mDma, memcpySubtaskSuccCb, memcpySubtaskErrCb,
+        num_memcpy_tasks);
 }
 
 doca_ctx *doca_dma_as_ctx(doca_dma *dma) {
@@ -114,6 +337,28 @@ doca_task *doca_dma_task_memcpy_as_task(doca_dma_task_memcpy *task) {
     return reinterpret_cast<doca_task *>(task);
 }
 
+void doca_dma_task_memcpy_set_src(doca_dma_task_memcpy *task,
+                                  const doca_buf *src) {
+    auto myTask = reinterpret_cast<DmaTaskMemcpy *>(task);
+    myTask->mSrcBuf = reinterpret_cast<const Buf *>(src);
+}
+
+const doca_buf *doca_dma_task_memcpy_get_src(
+    const doca_dma_task_memcpy *task) {
+    auto myTask = reinterpret_cast<const DmaTaskMemcpy *>(task);
+    return reinterpret_cast<const doca_buf *>(myTask->mSrcBuf);
+}
+
+void doca_dma_task_memcpy_set_dst(doca_dma_task_memcpy *task, doca_buf *dst) {
+    auto myTask = reinterpret_cast<DmaTaskMemcpy *>(task);
+    myTask->mDstBuf = reinterpret_cast<Buf *>(dst);
+}
+
+doca_buf *doca_dma_task_memcpy_get_dst(const doca_dma_task_memcpy *task) {
+    auto myTask = reinterpret_cast<const DmaTaskMemcpy *>(task);
+    return reinterpret_cast<doca_buf *>(myTask->mDstBuf);
+}
+
 doca_error_t doca_dma_task_memcpy_alloc_init(doca_dma *dma, const doca_buf *src,
                                              doca_buf *dst, doca_data user_data,
                                              doca_dma_task_memcpy **task) {
@@ -122,8 +367,7 @@ doca_error_t doca_dma_task_memcpy_alloc_init(doca_dma *dma, const doca_buf *src,
     auto myDstBuf = reinterpret_cast<Buf *>(dst);
     auto myTask = reinterpret_cast<DmaTaskMemcpy **>(task);
 
-    *myTask = new DmaTaskMemcpy;
-    return original_doca_dma_task_memcpy_alloc_init(myDma->mDma, mySrcBuf->mBuf,
-                                                    myDstBuf->mBuf, user_data,
-                                                    &(*myTask)->mTask);
+    *myTask = new DmaTaskMemcpy{myDma, mySrcBuf, myDstBuf, user_data};
+
+    return DOCA_SUCCESS;
 }

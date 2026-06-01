@@ -188,6 +188,7 @@ doca_error_t Ec::connectToPe(Pe *aPe) {
     aPe->mIsStoppeds.push_back(false);
     this->mPe = aPe;
     this->mIsStoppedIdx = idx;
+    gSharedData->appDatas[gAppId].hasEc = 1;
 
     aPe->mCtxs.push_back(this);
 
@@ -237,6 +238,7 @@ static inline doca_error_t submitCreateSubTask(Ec *aEc, doca_buf *aSrcBuf,
             userData.dstBuf = aDstBuf;
             userData.isLast = aIsLast;
             userData.isSub = aIsSub;
+            userData.stripId = aStripId;
 
             doca_ec_task_create_set_coding_matrix(specTask,
                                                   aRawTask->mMat->mMat);
@@ -266,9 +268,16 @@ static inline doca_error_t submitCreateSubTask(Ec *aEc, doca_buf *aSrcBuf,
 }
 
 doca_error_t EcTaskCreate::submit() {
-    const size_t granularity = gSharedData->appDatas[gAppId].granularity;
+    size_t granularity = gSharedData->appDatas[gAppId].ecGranularity;
     const size_t blkSize = mSrcBuf->mDataLen / mMat->mNbDataBlks;
-    const u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
+    u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
+
+    if (nbStrips > kBufPoolSize) {
+        nbStrips = kBufPoolSize;
+        granularity = blkSize / nbStrips;
+        DOCA_LOG_INFO("granularity is %lu, nbStrips is %u", granularity,
+                      nbStrips);
+    }
 
     auto curTime = std::chrono::high_resolution_clock::now();
     mExpectTime = std::chrono::microseconds(gSla) +
@@ -337,6 +346,7 @@ static inline doca_error_t submitRecoverSubTask(Ec *aEc, doca_buf *aSrcBuf,
             userData.dstBuf = aDstBuf;
             userData.isLast = aIsLast;
             userData.isSub = aIsSub;
+            userData.stripId = aStripId;
 
             doca_ec_task_recover_set_recover_matrix(specTask,
                                                     aRawTask->mMat->mMat);
@@ -366,7 +376,7 @@ static inline doca_error_t submitRecoverSubTask(Ec *aEc, doca_buf *aSrcBuf,
 }
 
 doca_error_t EcTaskRecover::submit() {
-    size_t granularity = gSharedData->appDatas[gAppId].granularity;
+    size_t granularity = gSharedData->appDatas[gAppId].ecGranularity;
     const size_t blkSize = mSrcBuf->mDataLen / mMat->mNbDataBlks;
     // nbStrips can be 0 if blkSize < granularity
     u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
@@ -461,9 +471,9 @@ static void createSubtaskSuccCb(doca_ec_task_create *task,
         auto curTime = std::chrono::high_resolution_clock::now();
         if (curTime > rawTask->mExpectTime) {
             LockHelper lockHelper;
-            lockHelper.lock(gSharedData->appDatas[gAppId].vioLock);
-            gSharedData->appDatas[gAppId].vioTimes++;
-            lockHelper.unlock(gSharedData->appDatas[gAppId].vioLock);
+            lockHelper.lock(gSharedData->appDatas[gAppId].ecVioLock);
+            gSharedData->appDatas[gAppId].ecVioTimes++;
+            lockHelper.unlock(gSharedData->appDatas[gAppId].ecVioLock);
         }
 
         rawTask->mEc->mCreateSuccCb(
@@ -525,9 +535,9 @@ static void recoverSubtaskSuccCb(doca_ec_task_recover *task,
         auto curTime = std::chrono::high_resolution_clock::now();
         if (curTime > rawTask->mExpectTime) {
             LockHelper lockHelper;
-            lockHelper.lock(gSharedData->appDatas[gAppId].vioLock);
-            gSharedData->appDatas[gAppId].vioTimes++;
-            lockHelper.unlock(gSharedData->appDatas[gAppId].vioLock);
+            lockHelper.lock(gSharedData->appDatas[gAppId].ecVioLock);
+            gSharedData->appDatas[gAppId].ecVioTimes++;
+            lockHelper.unlock(gSharedData->appDatas[gAppId].ecVioLock);
         }
 
         rawTask->mEc->mRecoverSuccCb(
@@ -556,6 +566,7 @@ doca_error_t doca_ec_create(doca_dev *dev, doca_ec **ec) {
     auto myEc = reinterpret_cast<Ec **>(ec);
 
     *myEc = new Ec;
+    (*myEc)->mAccelKind = AccelKind::Ec;
 
     int ret =
         posix_memalign(&(*myEc)->mMemAddr, 64, kBufPoolSize * kPerBufSize);

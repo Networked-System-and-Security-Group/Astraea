@@ -1,7 +1,8 @@
 .cache
 build
 *.tex
-*.py
+__pycache__/
+*.pyc
 *.pdf
 *.csv
 logs

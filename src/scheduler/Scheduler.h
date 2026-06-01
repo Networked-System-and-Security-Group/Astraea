@@ -18,7 +18,8 @@ constexpr u32 kAvailUssPerPeriod = kUssPerPeriod - kResvUssPerPeriod;
 class Scheduler {
     int mShmFd = 0;
     SharedData *mShmData = nullptr;
-    std::array<u32, kMaxNbApps> mAllocations = {0};
+    std::array<u32, kMaxNbApps> mEcAllocations = {0};
+    std::array<u32, kMaxNbApps> mDmaAllocations = {0};
 
    public:
     Scheduler();

@@ -16,9 +16,16 @@ const u32 kTaskQueueMask = kTaskQueueSize - 1;
 
 namespace astraea {
 class Pe;
+
+enum class AccelKind : u32 {
+    Ec,
+    Dma,
+};
+
 class Ctx {
    public:
     doca_ctx *mCtx = nullptr;
+    AccelKind mAccelKind = AccelKind::Ec;
 
     std::mutex *mLock = nullptr;
     Pe *mPe = nullptr;

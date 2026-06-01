@@ -55,6 +55,7 @@ target_link_libraries(astraea_broker PRIVATE
     PkgConfig::doca_common
     PkgConfig::doca_ec
     PkgConfig::doca_rdma
+    PkgConfig::doca_dma
     dl
 )
 
