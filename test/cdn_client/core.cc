@@ -286,7 +286,7 @@ void destroyBufs(CdnClientRscs &aRscs) {
 }
 
 doca_error_t init(const CdnClientCfg &aCfg, CdnClientRscs &aRscs) {
-    aRscs.requests = load_requests_text("./output.txt");
+    aRscs.requests = load_requests_text("data/meta.txt");
     CHECK_RETURN(openDev(aCfg.ibdevName, aRscs.dev), "open device");
     /* Server only need pe to built connection */
     CHECK_RETURN(doca_pe_create(&aRscs.pe), "create pe");
