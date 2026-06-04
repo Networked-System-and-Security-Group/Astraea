@@ -1,3 +1,5 @@
+#pragma once
+
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
 #include <doca_ctx.h>
@@ -7,6 +9,7 @@
 #include <doca_pe.h>
 #include <doca_rdma.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -15,87 +18,97 @@ using u32 = uint32_t;
 
 constexpr u32 kNbDataBlks = 128;
 constexpr u32 kNbRdncBlks = 32;
-constexpr size_t kMinChunkSize = 128 * 64;
-constexpr size_t kMaxChunkSize = 128 * 1024 * 1024;
-// Max mmap size is 1GB, 512MB for data buf and 512MB for rdnc buf
-constexpr u32 kMaxNbChunks = 1;
-constexpr u32 kMaxDataSize = kMaxChunkSize * kMaxNbChunks;
+constexpr size_t kMinBlockSize = 64;
+constexpr size_t kMaxBlockSize = 1024 * 1024;
+constexpr size_t kMinDataSize = kMinBlockSize * kNbDataBlks;
+constexpr size_t kMaxDataSize = kMaxBlockSize * kNbDataBlks;
+constexpr size_t kMaxRdncSize = kMaxBlockSize * kNbRdncBlks;
+constexpr size_t kStageMemSize = kMaxDataSize + kMaxRdncSize;
 
-struct alignas(64) CdnRscs;
-struct alignas(64) CdnCfg;
-
-struct alignas(64) CdnUserData {
-    CdnRscs &rscs;
-    const CdnCfg &cfg;
-    u32 stageId;
-    size_t requestSize;
-    u32 chunkId;
-    u32 nbChunks;
+struct Request {
+    uint64_t ts;
+    uint64_t size;
 };
 
-struct TaskPack {
-    std::vector<CdnUserData> userDatas;
+enum class StageState : u32 {
+    WaitingToSubmit,
+    EcInFlight,
+    WriteInFlight,
+    Done,
+};
 
-    // Bufs
-    std::vector<doca_buf *> dataBufs;
-    std::vector<doca_buf *> rdncBufs;
+struct alignas(64) CdnRscs;
 
-    doca_buf *sendBuf;
+struct StageCtx {
+    CdnRscs *rscs;
+    u32 stageId;
+    StageState state;
+    u32 reqIdx;
+    size_t wireBytes;
+    size_t ecBytes;
+    size_t rdncBytes;
+    std::chrono::high_resolution_clock::time_point reqBegin;
+};
+
+struct StageBufs {
+    doca_buf *dataBuf;
+    doca_buf *rdncBuf;
     doca_buf *clientBuf;
+};
 
-    // Tasks
-    doca_rdma_task_receive *recvTask;
-    doca_rdma_task_write_imm *immTask;
-    std::vector<doca_ec_task_recover *> ecTasks;
+struct StageTasks {
+    doca_ec_task_create *ecTask;
+    doca_rdma_task_write *writeTask;
 };
 
 struct alignas(64) CdnRscs {
     doca_pe *pe;
     doca_dev *dev;
 
-    /* RDMA resources */
     doca_rdma *rdma;
     doca_ctx *rdmaCtx;
     doca_rdma_connection *clientConn;
 
-    /* EC resources */
     doca_ec *ec;
     doca_ctx *ecCtx;
-    doca_ec_matrix *encMat, *decMat;
+    doca_ec_matrix *encMat;
 
-    /* Memory resources */
     doca_buf_inventory *bufInv;
-    /* Local memory */
     doca_mmap *localMmap;
     void *localMemAddr;
-    // std::vector<doca_buf *> recvBufs;
-    // std::vector<doca_buf *> sendBufs;
 
-    /* Client memory */
     doca_mmap *clientMmap;
-    // std::vector<doca_buf *> clientBufs;
 
-    /* Task resources */
-    std::vector<TaskPack> packs;
-    std::vector<bool> pendingWrites;
+    std::vector<StageCtx> stageCtxs;
+    std::vector<StageBufs> stageBufs;
+    std::vector<StageTasks> stageTasks;
 
-    /* Thread metadata, should init by main thread */
+    std::vector<Request> requests;
+    u32 nbRequests;
+    uint64_t traceT0;
+
+    std::vector<double> jcts;
+    double nbWrittenGB;
+    double nbEcGB;
+    u32 nbCompletedReqs;
+
     u32 threadId;
-    // u32 nbFinishedTasks;
-    u32 nbFreedTasks;
     uint16_t port;
-
-    std::vector<u32> recvIds;
+    std::chrono::high_resolution_clock::time_point wallStart;
 };
 
 struct alignas(64) CdnCfg {
     char ibdevName[1024];
+    char tracePath[1024];
     u32 gidIdx;
     uint16_t nbThreads;
     u32 nbPipelineStages;
     u32 nbRequests;
+    double traceTickUs;
+    double replaySpeed;
 };
 
-doca_error_t init(const CdnCfg &aCfg, CdnRscs &oCtx);
-void destroy(CdnRscs &aCtx);
-void runTasks(const CdnCfg &aCfg, CdnRscs &aCtx);
+doca_error_t init(const CdnCfg &aCfg, CdnRscs &aRscs);
+void destroy(CdnRscs &aRscs);
+void runTasks(const CdnCfg &aCfg, CdnRscs &aRscs);
+std::vector<Request> loadTrace(const char *aPath);
