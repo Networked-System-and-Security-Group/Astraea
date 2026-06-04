@@ -290,7 +290,7 @@ static doca_error_t initTasks(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
 }
 
 doca_error_t init(const ReplicaCfg &aCfg, ReplicaRscs &aRscs) {
-    aRscs.requests = load_requests_text("./ali.txt");
+    aRscs.requests = load_requests_text("data/ali.txt");
     CHECK_RETURN(openDev(aCfg.ibdevName, aRscs.dev), "open device");
 
     CHECK_RETURN(doca_pe_create(&aRscs.pe), "create pe");

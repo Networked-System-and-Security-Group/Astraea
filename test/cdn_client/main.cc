@@ -120,7 +120,7 @@ doca_error_t worker(const CdnClientCfg &aCfg, CdnClientRscs &rscs) {
 int main(int argc, char **argv) {
     CHECK_RETURN(registerLogger(DOCA_LOG_LEVEL_WARNING), "register logger");
 
-    CdnClientCfg cfg = {.ibdevName = "mlx5_2",
+    CdnClientCfg cfg = {.ibdevName = "mlx5_3",
                         .gidIdx = 1,
                         .serverIpAddr = "12.12.12.2",
                         .mmapSize = kMaxMsgSize,
