@@ -56,6 +56,8 @@ double getMedian(std::vector<size_t> vec) {
     }
 }
 
+static size_t align_up_64(size_t x) { return (x + 63) & ~((size_t)63); }
+
 std::vector<Request> load_requests_text(const std::string &path) {
     std::ifstream ifs{path};
     if (!ifs) throw std::runtime_error("open for read failed: " + path);
@@ -88,7 +90,7 @@ std::vector<Request> load_requests_text(const std::string &path) {
         uint64_t ts = 0, sz = 0;
         if (!(iss >> ts >> sz))
             throw std::runtime_error("bad data line: " + line);
-        events.emplace_back(ts, sz);
+        events.emplace_back(ts, align_up_64(sz));
     }
 
     return events;
