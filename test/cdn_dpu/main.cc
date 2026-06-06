@@ -42,8 +42,7 @@ static double percentile(const std::vector<double> &sorted, double p) {
     return sorted[idx];
 }
 
-static void printStats(const std::vector<CdnRscs> &rscss,
-                       double wallSeconds) {
+static void printStats(const std::vector<CdnRscs> &rscss, double wallSeconds) {
     std::vector<double> jcts;
     double writtenGB = 0.0;
     double ecGB = 0.0;
@@ -144,33 +143,26 @@ static doca_error_t replaySpeedCb(void *aVal, void *aCfg) {
 
 static doca_error_t registerParams(CdnCfg &aCfg) {
     CHECK_RETURN(
-        registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING,
-                         ibdevNameCb),
+        registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name");
-    CHECK_RETURN(
-        registerOneParam("f", "trace file path", DOCA_ARGP_TYPE_STRING,
-                         tracePathCb),
-        "register trace path");
-    CHECK_RETURN(
-        registerOneParam("t", "number of threads", DOCA_ARGP_TYPE_INT,
-                         nbThreadsCb),
-        "register threads number");
-    CHECK_RETURN(
-        registerOneParam("p", "number of pipeline stages",
-                         DOCA_ARGP_TYPE_INT, nbPipelineStagesCb),
-        "register pipeline stages");
-    CHECK_RETURN(
-        registerOneParam("r", "request count cap (0 = all)",
-                         DOCA_ARGP_TYPE_INT, nbRequestsCb),
-        "register requests number");
-    CHECK_RETURN(
-        registerOneParam("u", "microseconds per trace tick",
-                         DOCA_ARGP_TYPE_DOUBLE, traceTickUsCb),
-        "register trace tick");
-    CHECK_RETURN(
-        registerOneParam("s", "replay speed multiplier",
-                         DOCA_ARGP_TYPE_DOUBLE, replaySpeedCb),
-        "register replay speed");
+    CHECK_RETURN(registerOneParam("f", "trace file path", DOCA_ARGP_TYPE_STRING,
+                                  tracePathCb),
+                 "register trace path");
+    CHECK_RETURN(registerOneParam("t", "number of threads", DOCA_ARGP_TYPE_INT,
+                                  nbThreadsCb),
+                 "register threads number");
+    CHECK_RETURN(registerOneParam("p", "number of pipeline stages",
+                                  DOCA_ARGP_TYPE_INT, nbPipelineStagesCb),
+                 "register pipeline stages");
+    CHECK_RETURN(registerOneParam("r", "request count cap (0 = all)",
+                                  DOCA_ARGP_TYPE_INT, nbRequestsCb),
+                 "register requests number");
+    CHECK_RETURN(registerOneParam("u", "microseconds per trace tick",
+                                  DOCA_ARGP_TYPE_DOUBLE, traceTickUsCb),
+                 "register trace tick");
+    CHECK_RETURN(registerOneParam("s", "replay speed multiplier",
+                                  DOCA_ARGP_TYPE_DOUBLE, replaySpeedCb),
+                 "register replay speed");
     return DOCA_SUCCESS;
 }
 
@@ -195,7 +187,7 @@ int main(int argc, char **argv) {
                   .nbThreads = 3,
                   .nbPipelineStages = 4,
                   .nbRequests = 0,
-                  .traceTickUs = 1.0,
+                  .traceTickUs = 10.0,
                   .replaySpeed = 1.0};
 
     CHECK_RETURN(doca_argp_init("cdn_dpu", &cfg), "init argp");

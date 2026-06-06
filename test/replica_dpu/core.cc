@@ -150,7 +150,7 @@ void WriteSuccCb(doca_rdma_task_write *task, doca_data task_user_data,
             uint64_t rel_ms = (rscs.requests[requestId].ts_ms >= t0)
                                   ? (rscs.requests[requestId].ts_ms - t0)
                                   : 0;
-            auto target = gBeginTime + std::chrono::nanoseconds(rel_ms * 100);
+            auto target = gBeginTime + std::chrono::microseconds(rel_ms * 10);
             std::this_thread::sleep_until(target);
 
             size_t rounded = (rscs.requests[rscs.requestIds[stageId]].size +

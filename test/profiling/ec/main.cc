@@ -6,17 +6,16 @@
 #include <cstdlib>
 // #include <format>
 
-#include <doca_ctx.h>
-#include <doca_dev.h>
-#include <doca_error.h>
-#include <doca_log.h>
-#include <doca_pe.h>
-
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
-#include <doca_mmap.h>
-
+#include <doca_ctx.h>
+#include <doca_dev.h>
 #include <doca_erasure_coding.h>
+#include <doca_error.h>
+#include <doca_log.h>
+#include <doca_mmap.h>
+#include <doca_pe.h>
+
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -122,7 +121,6 @@ static void recoverSuccCb(doca_ec_task_recover *task, doca_data task_user_data,
 
 static void recoverErrCb(doca_ec_task_recover *task, doca_data task_user_data,
                          doca_data ctx_user_data) {
-
     gNbFinishedTasks++;
     DOCA_LOG_ERR("Failed to do ec recover task");
 }
@@ -139,7 +137,6 @@ static void recoverSuccCbPipeline(doca_ec_task_recover *task,
 static void recoverErrCbPipeline(doca_ec_task_recover *task,
                                  doca_data task_user_data,
                                  doca_data ctx_user_data) {
-
     gNbFinishedTasks++;
     DOCA_LOG_ERR("Failed to do ec recover task");
 }
@@ -196,7 +193,7 @@ static void profileCreate(doca_pe *aPe, doca_ec *aEc, doca_ctx *aCtx,
         }
     }
 
-    std::ofstream logFile{"ec_prof_wo_pipeline.txt"};
+    std::ofstream logFile{"logs/ec_prof_wo_pipeline.txt"};
     if (logFile.is_open()) {
         logFile << printResults(results) << std::endl;
         logFile.close();
@@ -205,10 +202,9 @@ static void profileCreate(doca_pe *aPe, doca_ec *aEc, doca_ctx *aCtx,
     CHECK_LOG(doca_ctx_stop(aCtx), "stop ctx");
 }
 
-static void
-profileCreatePipeline(doca_pe *aPe, doca_ec *aEc, doca_ctx *aCtx,
-                      doca_buf *aSrcBuf,
-                      std::array<doca_buf *, kMaxNbTasks> &aDstBufs) {
+static void profileCreatePipeline(
+    doca_pe *aPe, doca_ec *aEc, doca_ctx *aCtx, doca_buf *aSrcBuf,
+    std::array<doca_buf *, kMaxNbTasks> &aDstBufs) {
     CHECK_LOG(doca_ec_task_create_set_conf(aEc, createSuccCbPipeline,
                                            createErrCbPipeline, kMaxNbTasks),
               "set create task conf");
@@ -339,10 +335,9 @@ static void profileRecover(doca_pe *aPe, doca_ec *aEc, doca_ctx *aCtx,
     CHECK_LOG(doca_ctx_stop(aCtx), "stop ctx");
 }
 
-static void
-profileRecoverPipeline(doca_pe *aPe, doca_ec *aEc, doca_ctx *aCtx,
-                       doca_buf *aSrcBuf,
-                       std::array<doca_buf *, kMaxNbTasks> &aDstBufs) {
+static void profileRecoverPipeline(
+    doca_pe *aPe, doca_ec *aEc, doca_ctx *aCtx, doca_buf *aSrcBuf,
+    std::array<doca_buf *, kMaxNbTasks> &aDstBufs) {
     CHECK_LOG(doca_ec_task_recover_set_conf(aEc, recoverSuccCbPipeline,
                                             recoverErrCbPipeline, kMaxNbTasks),
               "set create task conf");

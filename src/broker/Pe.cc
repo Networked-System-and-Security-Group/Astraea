@@ -5,6 +5,7 @@
 #include <doca_log.h>
 #include <doca_pe.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -73,6 +74,35 @@ static u32 &usageFor(AppData &aAppData, AccelKind aKind) {
     return aKind == AccelKind::Dma ? aAppData.dmaUsage : aAppData.ecUsage;
 }
 
+static u32 activeCountFor(AccelKind aKind) {
+    const u32 nbApps = std::min(gSharedData->nbApps, kMaxNbApps);
+    u32 nbActive = 0;
+    for (u32 i = 0; i < nbApps; i++) {
+        const AppData &appData = gSharedData->appDatas[i];
+        if (aKind == AccelKind::Dma ? appData.hasDma : appData.hasEc) {
+            nbActive++;
+        }
+    }
+    return nbActive;
+}
+
+static bool hasPendingWork(Pe *aPe, const std::vector<u32> &aSubmitPoss) {
+    if (aSubmitPoss.size() < aPe->mCtxs.size()) {
+        return true;
+    }
+
+    for (u32 i = 0; i < aPe->mCtxs.size(); i++) {
+        if (aPe->mIsStoppeds[i]) {
+            continue;
+        }
+        const auto ctx = aPe->mCtxs[i];
+        if (aSubmitPoss[i] != ctx->mTail.load(std::memory_order_acquire)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void worker(std::stop_token aToken, Pe *aPe) {
     std::vector<u32> submitPoss;
     LockHelper lockHelper;
@@ -112,7 +142,8 @@ static void worker(std::stop_token aToken, Pe *aPe) {
             // if (nearViolated) {
             //     DOCA_LOG_INFO("near violated");
             // }
-            if (haveAvailTime || nearViolated || gSharedData->nbApps == 1) {
+            if (haveAvailTime || nearViolated ||
+                activeCountFor(ctx->mAccelKind) <= 1) {
                 aPe->mLocks[i]->lock();
                 CHECK_LOG(original_doca_task_submit(ctx->mSubTaskQ[submitPos]),
                           "submit subtask");
@@ -126,7 +157,11 @@ static void worker(std::stop_token aToken, Pe *aPe) {
         }
 
         if (!didWork) {
-            std::this_thread::sleep_for(std::chrono::microseconds(1));
+            std::unique_lock<std::mutex> lock(aPe->mWorkerMtx);
+            aPe->mWorkerCv.wait_for(lock, std::chrono::milliseconds(1), [&] {
+                return aToken.stop_requested() ||
+                       hasPendingWork(aPe, submitPoss);
+            });
         }
     }
 }
@@ -156,6 +191,7 @@ doca_error_t doca_pe_create(doca_pe **pe) {
 doca_error_t doca_pe_destroy(doca_pe *pe) {
     Pe *myPe = reinterpret_cast<Pe *>(pe);
     myPe->mWorker->request_stop();
+    myPe->notifyWorker();
     myPe->mWorker->join();
     doca_error_t status = original_doca_pe_destroy(myPe->mPe);
 

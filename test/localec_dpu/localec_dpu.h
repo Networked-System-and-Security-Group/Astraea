@@ -19,25 +19,24 @@ using u32 = uint32_t;
 constexpr u32 kNbDataBlks = 128;
 constexpr u32 kNbRdncBlks = 32;
 constexpr size_t kDmaChunkSize = 2 * 1024 * 1024;              /* 2MB */
-constexpr size_t kMaxBlockSize = 1024 * 1024;                  /* 1MB */
 constexpr size_t kMinBlockSize = 64;
 constexpr size_t kMinDataSize = kMinBlockSize * kNbDataBlks;   /* 8KB */
-constexpr size_t kMaxDataSize = kMaxBlockSize * kNbDataBlks;   /* 128MB */
-constexpr size_t kMaxRdncSize = kMaxBlockSize * kNbRdncBlks;   /* 32MB */
-constexpr size_t kStageMemSize = kMaxDataSize + kMaxRdncSize;  /* 160MB */
-constexpr size_t kHostHalfSize = kStageMemSize;                /* 160MB */
-
-constexpr u32 kMaxReadChunks =
-    (kMaxDataSize + kDmaChunkSize - 1) / kDmaChunkSize;        /* 64 */
-constexpr u32 kMaxRdncChunks =
-    (kMaxRdncSize + kDmaChunkSize - 1) / kDmaChunkSize;        /* 16 */
+constexpr size_t kMaxDataSize =
+    (kDmaChunkSize * kNbDataBlks / (kNbDataBlks + kNbRdncBlks) /
+     kMinDataSize) *
+    kMinDataSize;                                              /* 1671168B */
+constexpr size_t kMaxBlockSize = kMaxDataSize / kNbDataBlks;   /* 13056B */
+constexpr size_t kMaxRdncSize = kMaxBlockSize * kNbRdncBlks;   /* 417792B */
+constexpr size_t kStageMemSize = kMaxDataSize + kMaxRdncSize;  /* <= 2MB */
+constexpr size_t kHostHalfSize = kStageMemSize;
+constexpr u32 kNbEcTaskVariants = kMaxDataSize / kMinDataSize;
 
 struct Request {
     uint64_t ts;
     uint64_t size;
 };
 
-enum class DmaPhase : u32 { Read, WriteData, WriteRdnc };
+enum class DmaPhase : u32 { Read, Write };
 
 enum class StageState : u32 {
     WaitingToSubmit,
@@ -58,11 +57,6 @@ struct StageCtx {
     u32 reqIdx;
     size_t rounded;
     size_t rdncBytes;
-    u32 nbReadChunks;
-    u32 nbWriteDataChunks;
-    u32 nbWriteRdncChunks;
-    u32 nbReadDone;
-    u32 nbWriteDone;
 
     std::chrono::high_resolution_clock::time_point targetTime;
     std::chrono::high_resolution_clock::time_point reqBegin;
@@ -74,25 +68,21 @@ struct DmaTaskCtx {
 };
 
 struct StageBufs {
-    doca_buf *ecDataBuf;
-    doca_buf *ecRdncBuf;
+    std::vector<doca_buf *> ecDataBufs;
+    std::vector<doca_buf *> ecRdncBufs;
 
-    std::vector<doca_buf *> readSrcBufs;       /* host src half slices */
-    std::vector<doca_buf *> readDstBufs;       /* DPU data area slices */
-    std::vector<doca_buf *> writeDataSrcBufs;  /* DPU data area slices */
-    std::vector<doca_buf *> writeDataDstBufs;  /* host dst data slices */
-    std::vector<doca_buf *> writeRdncSrcBufs;  /* DPU rdnc area slices */
-    std::vector<doca_buf *> writeRdncDstBufs;  /* host dst rdnc slices */
+    doca_buf *readSrcBuf;   /* host src -> DPU data */
+    doca_buf *readDstBuf;
+    doca_buf *writeSrcBuf;  /* DPU data+rdnc -> host dst */
+    doca_buf *writeDstBuf;
 };
 
 struct StageTasks {
-    std::vector<doca_dma_task_memcpy *> readTasks;
-    std::vector<doca_dma_task_memcpy *> writeDataTasks;
-    std::vector<doca_dma_task_memcpy *> writeRdncTasks;
-    std::vector<DmaTaskCtx> readCtxs;
-    std::vector<DmaTaskCtx> writeDataCtxs;
-    std::vector<DmaTaskCtx> writeRdncCtxs;
-    doca_ec_task_create *ecTask;
+    doca_dma_task_memcpy *readTask;
+    doca_dma_task_memcpy *writeTask;
+    DmaTaskCtx readCtx;
+    DmaTaskCtx writeCtx;
+    std::vector<doca_ec_task_create *> ecTasks;
 };
 
 struct alignas(64) LocalEcRscs {

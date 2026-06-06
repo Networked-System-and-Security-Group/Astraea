@@ -92,12 +92,10 @@ static void computeReqParams(StageCtx &aStage, size_t aRawSize) {
     size_t blockSize = rounded / kNbDataBlks;
     aStage.rounded = rounded;
     aStage.rdncBytes = blockSize * kNbRdncBlks;
-    aStage.nbReadChunks = (rounded + kDmaChunkSize - 1) / kDmaChunkSize;
-    aStage.nbWriteDataChunks = aStage.nbReadChunks;
-    aStage.nbWriteRdncChunks =
-        (aStage.rdncBytes + kDmaChunkSize - 1) / kDmaChunkSize;
-    aStage.nbReadDone = 0;
-    aStage.nbWriteDone = 0;
+}
+
+static u32 ecTaskIdx(const StageCtx &aStage) {
+    return static_cast<u32>(aStage.rounded / kMinDataSize) - 1;
 }
 
 static std::chrono::high_resolution_clock::time_point computeTarget(
@@ -126,20 +124,13 @@ static void dmaSuccCb(doca_dma_task_memcpy *task, doca_data task_user_data,
     DmaTaskCtx *ctx = static_cast<DmaTaskCtx *>(task_user_data.ptr);
     StageCtx &stage = *ctx->stage;
     if (ctx->phase == DmaPhase::Read) {
-        stage.nbReadDone++;
-        if (stage.nbReadDone == stage.nbReadChunks) {
-            if (gForceQuit) {
-                stage.state = StageState::Done;
-            } else {
-                submitEc(stage);
-            }
+        if (gForceQuit) {
+            stage.state = StageState::Done;
+        } else {
+            submitEc(stage);
         }
     } else {
-        stage.nbWriteDone++;
-        if (stage.nbWriteDone ==
-            stage.nbWriteDataChunks + stage.nbWriteRdncChunks) {
-            onRequestDone(stage);
-        }
+        onRequestDone(stage);
     }
 }
 
@@ -150,18 +141,7 @@ static void dmaErrCb(doca_dma_task_memcpy *task, doca_data task_user_data,
     DOCA_LOG_ERR("DMA task failed: stage=%u phase=%u", stage.stageId,
                  static_cast<u32>(ctx->phase));
     gForceQuit = true;
-    if (ctx->phase == DmaPhase::Read) {
-        stage.nbReadDone++;
-        if (stage.nbReadDone == stage.nbReadChunks) {
-            stage.state = StageState::Done;
-        }
-    } else {
-        stage.nbWriteDone++;
-        if (stage.nbWriteDone ==
-            stage.nbWriteDataChunks + stage.nbWriteRdncChunks) {
-            stage.state = StageState::Done;
-        }
-    }
+    stage.state = StageState::Done;
 }
 
 static void ecSuccCb(doca_ec_task_create *task, doca_data task_user_data,
@@ -192,33 +172,29 @@ static void submitRead(StageCtx &aStage) {
 
     aStage.reqBegin = std::chrono::high_resolution_clock::now();
     aStage.state = StageState::ReadInFlight;
-    aStage.nbReadDone = 0;
 
-    for (u32 i = 0; i < aStage.nbReadChunks; ++i) {
-        size_t chunkSize =
-            std::min<size_t>(kDmaChunkSize, aStage.rounded - i * kDmaChunkSize);
-        CHECK_LOG(doca_buf_set_data_len(bufs.readSrcBufs[i], chunkSize),
-                  "set read src data len");
-        CHECK_LOG(doca_buf_set_data_len(bufs.readDstBufs[i], 0),
-                  "reset read dst data len");
-        CHECK_LOG(
-            doca_task_submit(doca_dma_task_memcpy_as_task(tasks.readTasks[i])),
-            "submit dma read task");
-    }
+    CHECK_LOG(doca_buf_set_data_len(bufs.readSrcBuf, aStage.rounded),
+              "set read src data len");
+    CHECK_LOG(doca_buf_set_data_len(bufs.readDstBuf, 0),
+              "reset read dst data len");
+    CHECK_LOG(doca_task_submit(doca_dma_task_memcpy_as_task(tasks.readTask)),
+              "submit dma read task");
 }
 
 static void submitEc(StageCtx &aStage) {
     LocalEcRscs &rscs = *aStage.rscs;
     StageBufs &bufs = rscs.stageBufs[aStage.stageId];
     StageTasks &tasks = rscs.stageTasks[aStage.stageId];
+    u32 taskIdx = ecTaskIdx(aStage);
 
     aStage.state = StageState::EcInFlight;
-    CHECK_LOG(doca_buf_set_data_len(bufs.ecDataBuf, aStage.rounded),
+    CHECK_LOG(doca_buf_set_data_len(bufs.ecDataBufs[taskIdx], aStage.rounded),
               "set ec data buf len");
-    CHECK_LOG(doca_buf_set_data_len(bufs.ecRdncBuf, 0),
+    CHECK_LOG(doca_buf_set_data_len(bufs.ecRdncBufs[taskIdx], 0),
               "reset ec rdnc buf len");
-    CHECK_LOG(doca_task_submit(doca_ec_task_create_as_task(tasks.ecTask)),
-              "submit ec task");
+    CHECK_LOG(
+        doca_task_submit(doca_ec_task_create_as_task(tasks.ecTasks[taskIdx])),
+        "submit ec task");
 }
 
 static void submitWrites(StageCtx &aStage) {
@@ -227,31 +203,14 @@ static void submitWrites(StageCtx &aStage) {
     StageTasks &tasks = rscs.stageTasks[aStage.stageId];
 
     aStage.state = StageState::WriteInFlight;
-    aStage.nbWriteDone = 0;
+    size_t writeBytes = aStage.rounded + aStage.rdncBytes;
 
-    for (u32 i = 0; i < aStage.nbWriteDataChunks; ++i) {
-        size_t chunkSize =
-            std::min<size_t>(kDmaChunkSize, aStage.rounded - i * kDmaChunkSize);
-        CHECK_LOG(doca_buf_set_data_len(bufs.writeDataSrcBufs[i], chunkSize),
-                  "set write data src len");
-        CHECK_LOG(doca_buf_set_data_len(bufs.writeDataDstBufs[i], 0),
-                  "reset write data dst len");
-        CHECK_LOG(doca_task_submit(
-                      doca_dma_task_memcpy_as_task(tasks.writeDataTasks[i])),
-                  "submit dma write data task");
-    }
-
-    for (u32 i = 0; i < aStage.nbWriteRdncChunks; ++i) {
-        size_t chunkSize = std::min<size_t>(
-            kDmaChunkSize, aStage.rdncBytes - i * kDmaChunkSize);
-        CHECK_LOG(doca_buf_set_data_len(bufs.writeRdncSrcBufs[i], chunkSize),
-                  "set write rdnc src len");
-        CHECK_LOG(doca_buf_set_data_len(bufs.writeRdncDstBufs[i], 0),
-                  "reset write rdnc dst len");
-        CHECK_LOG(doca_task_submit(
-                      doca_dma_task_memcpy_as_task(tasks.writeRdncTasks[i])),
-                  "submit dma write rdnc task");
-    }
+    CHECK_LOG(doca_buf_set_data_len(bufs.writeSrcBuf, writeBytes),
+              "set combined write src len");
+    CHECK_LOG(doca_buf_set_data_len(bufs.writeDstBuf, 0),
+              "reset combined write dst len");
+    CHECK_LOG(doca_task_submit(doca_dma_task_memcpy_as_task(tasks.writeTask)),
+              "submit combined dma write task");
 }
 
 static void onRequestDone(StageCtx &aStage) {
@@ -290,10 +249,14 @@ static doca_error_t initStageBufs(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
     size_t hostSize;
     CHECK_RETURN(doca_mmap_get_memrange(aRscs.hostMmap, &hostBase, &hostSize),
                  "get host mmap range");
+    if (hostSize < kHostHalfSize + kStageMemSize) {
+        DOCA_LOG_ERR("Host mmap too small: have %zu bytes, need %zu bytes",
+                     hostSize, kHostHalfSize + kStageMemSize);
+        return DOCA_ERROR_NO_MEMORY;
+    }
+
     char *hostSrc = static_cast<char *>(hostBase);
     char *hostDst = hostSrc + kHostHalfSize;
-    char *hostDstData = hostDst;
-    char *hostDstRdnc = hostDst + kMaxDataSize;
 
     char *localBase = static_cast<char *>(aRscs.localMemAddr);
 
@@ -301,66 +264,41 @@ static doca_error_t initStageBufs(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
     for (u32 s = 0; s < aCfg.nbStages; ++s) {
         StageBufs &bufs = aRscs.stageBufs[s];
         char *stageData = localBase + s * kStageMemSize;
-        char *stageRdnc = stageData + kMaxDataSize;
 
-        /* EC bufs: cover the full data/rdnc area for this stage. */
+        /* One EC buffer pair per possible rounded size. The rdnc buffer starts
+         * exactly after the data bytes, so data+rdnc is contiguous. */
+        bufs.ecDataBufs.resize(kNbEcTaskVariants);
+        bufs.ecRdncBufs.resize(kNbEcTaskVariants);
+        for (u32 i = 0; i < kNbEcTaskVariants; ++i) {
+            size_t rounded = static_cast<size_t>(i + 1) * kMinDataSize;
+            size_t rdncBytes = rounded / kNbDataBlks * kNbRdncBlks;
+            CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
+                             aRscs.bufInv, aRscs.localMmap, stageData, rounded,
+                             &bufs.ecDataBufs[i]),
+                         "get ec data buf");
+            CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
+                             aRscs.bufInv, aRscs.localMmap,
+                             stageData + rounded, rdncBytes,
+                             &bufs.ecRdncBufs[i]),
+                         "get ec rdnc buf");
+        }
+
         CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                         aRscs.bufInv, aRscs.localMmap, stageData, kMaxDataSize,
-                         &bufs.ecDataBuf),
-                     "get ec data buf");
+                         aRscs.bufInv, aRscs.hostMmap, hostSrc, kMaxDataSize,
+                         &bufs.readSrcBuf),
+                     "get read src buf");
         CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                         aRscs.bufInv, aRscs.localMmap, stageRdnc, kMaxRdncSize,
-                         &bufs.ecRdncBuf),
-                     "get ec rdnc buf");
-
-        /* DMA read bufs: host_src[c] -> stageData[c], one pair per 2MB chunk.
-         */
-        bufs.readSrcBufs.resize(kMaxReadChunks);
-        bufs.readDstBufs.resize(kMaxReadChunks);
-        for (u32 c = 0; c < kMaxReadChunks; ++c) {
-            CHECK_RETURN(
-                doca_buf_inventory_buf_get_by_addr(
-                    aRscs.bufInv, aRscs.hostMmap, hostSrc + c * kDmaChunkSize,
-                    kDmaChunkSize, &bufs.readSrcBufs[c]),
-                "get read src buf");
-            CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                             aRscs.bufInv, aRscs.localMmap,
-                             stageData + c * kDmaChunkSize, kDmaChunkSize,
-                             &bufs.readDstBufs[c]),
-                         "get read dst buf");
-        }
-
-        /* DMA write data bufs: stageData[c] -> hostDstData[c]. */
-        bufs.writeDataSrcBufs.resize(kMaxReadChunks);
-        bufs.writeDataDstBufs.resize(kMaxReadChunks);
-        for (u32 c = 0; c < kMaxReadChunks; ++c) {
-            CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                             aRscs.bufInv, aRscs.localMmap,
-                             stageData + c * kDmaChunkSize, kDmaChunkSize,
-                             &bufs.writeDataSrcBufs[c]),
-                         "get write data src buf");
-            CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                             aRscs.bufInv, aRscs.hostMmap,
-                             hostDstData + c * kDmaChunkSize, kDmaChunkSize,
-                             &bufs.writeDataDstBufs[c]),
-                         "get write data dst buf");
-        }
-
-        /* DMA write rdnc bufs: stageRdnc[c] -> hostDstRdnc[c]. */
-        bufs.writeRdncSrcBufs.resize(kMaxRdncChunks);
-        bufs.writeRdncDstBufs.resize(kMaxRdncChunks);
-        for (u32 c = 0; c < kMaxRdncChunks; ++c) {
-            CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                             aRscs.bufInv, aRscs.localMmap,
-                             stageRdnc + c * kDmaChunkSize, kDmaChunkSize,
-                             &bufs.writeRdncSrcBufs[c]),
-                         "get write rdnc src buf");
-            CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                             aRscs.bufInv, aRscs.hostMmap,
-                             hostDstRdnc + c * kDmaChunkSize, kDmaChunkSize,
-                             &bufs.writeRdncDstBufs[c]),
-                         "get write rdnc dst buf");
-        }
+                         aRscs.bufInv, aRscs.localMmap, stageData,
+                         kMaxDataSize, &bufs.readDstBuf),
+                     "get read dst buf");
+        CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
+                         aRscs.bufInv, aRscs.localMmap, stageData,
+                         kStageMemSize, &bufs.writeSrcBuf),
+                     "get combined write src buf");
+        CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
+                         aRscs.bufInv, aRscs.hostMmap, hostDst, kStageMemSize,
+                         &bufs.writeDstBuf),
+                     "get combined write dst buf");
     }
     return DOCA_SUCCESS;
 }
@@ -372,45 +310,26 @@ static doca_error_t initStageTasks(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
         StageTasks &tasks = aRscs.stageTasks[s];
         StageCtx *stagePtr = &aRscs.stageCtxs[s];
 
-        tasks.readCtxs.resize(kMaxReadChunks);
-        tasks.writeDataCtxs.resize(kMaxReadChunks);
-        tasks.writeRdncCtxs.resize(kMaxRdncChunks);
-        tasks.readTasks.resize(kMaxReadChunks);
-        tasks.writeDataTasks.resize(kMaxReadChunks);
-        tasks.writeRdncTasks.resize(kMaxRdncChunks);
+        tasks.readCtx = {.stage = stagePtr, .phase = DmaPhase::Read};
+        CHECK_RETURN(doca_dma_task_memcpy_alloc_init(
+                         aRscs.dma, bufs.readSrcBuf, bufs.readDstBuf,
+                         {.ptr = &tasks.readCtx}, &tasks.readTask),
+                     "alloc dma read task");
 
-        for (u32 c = 0; c < kMaxReadChunks; ++c) {
-            tasks.readCtxs[c] = {.stage = stagePtr, .phase = DmaPhase::Read};
-            CHECK_RETURN(
-                doca_dma_task_memcpy_alloc_init(
-                    aRscs.dma, bufs.readSrcBufs[c], bufs.readDstBufs[c],
-                    {.ptr = &tasks.readCtxs[c]}, &tasks.readTasks[c]),
-                "alloc dma read task");
+        tasks.writeCtx = {.stage = stagePtr, .phase = DmaPhase::Write};
+        CHECK_RETURN(doca_dma_task_memcpy_alloc_init(
+                         aRscs.dma, bufs.writeSrcBuf, bufs.writeDstBuf,
+                         {.ptr = &tasks.writeCtx}, &tasks.writeTask),
+                     "alloc combined dma write task");
 
-            tasks.writeDataCtxs[c] = {.stage = stagePtr,
-                                      .phase = DmaPhase::WriteData};
-            CHECK_RETURN(
-                doca_dma_task_memcpy_alloc_init(
-                    aRscs.dma, bufs.writeDataSrcBufs[c],
-                    bufs.writeDataDstBufs[c], {.ptr = &tasks.writeDataCtxs[c]},
-                    &tasks.writeDataTasks[c]),
-                "alloc dma write data task");
+        tasks.ecTasks.resize(kNbEcTaskVariants);
+        for (u32 i = 0; i < kNbEcTaskVariants; ++i) {
+            CHECK_RETURN(doca_ec_task_create_allocate_init(
+                             aRscs.ec, aRscs.encMat, bufs.ecDataBufs[i],
+                             bufs.ecRdncBufs[i], {.ptr = stagePtr},
+                             &tasks.ecTasks[i]),
+                         "alloc ec task");
         }
-        for (u32 c = 0; c < kMaxRdncChunks; ++c) {
-            tasks.writeRdncCtxs[c] = {.stage = stagePtr,
-                                      .phase = DmaPhase::WriteRdnc};
-            CHECK_RETURN(
-                doca_dma_task_memcpy_alloc_init(
-                    aRscs.dma, bufs.writeRdncSrcBufs[c],
-                    bufs.writeRdncDstBufs[c], {.ptr = &tasks.writeRdncCtxs[c]},
-                    &tasks.writeRdncTasks[c]),
-                "alloc dma write rdnc task");
-        }
-
-        CHECK_RETURN(doca_ec_task_create_allocate_init(
-                         aRscs.ec, aRscs.encMat, bufs.ecDataBuf, bufs.ecRdncBuf,
-                         {.ptr = stagePtr}, &tasks.ecTask),
-                     "alloc ec task");
     }
     return DOCA_SUCCESS;
 }
@@ -436,11 +355,8 @@ doca_error_t init(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
 
     /* Local mmap: one stage region per pipeline stage. */
     size_t localMmapSize = static_cast<size_t>(aCfg.nbStages) * kStageMemSize;
-    /* 6 buf classes per stage (4 with kMaxReadChunks, 2 with kMaxRdncChunks)
-     * plus 2 EC bufs. Round up generously. */
-    size_t maxNbBufs = static_cast<size_t>(aCfg.nbStages) *
-                           (4 * kMaxReadChunks + 2 * kMaxRdncChunks + 2) +
-                       16;
+    size_t maxNbBufs =
+        static_cast<size_t>(aCfg.nbStages) * (2 * kNbEcTaskVariants + 4) + 16;
     CHECK_RETURN(initMemory(maxNbBufs, aRscs.dev, localMmapSize,
                             aRscs.localMemAddr, aRscs.localMmap, aRscs.bufInv),
                  "init local memory");
@@ -481,7 +397,6 @@ void runTasks(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
             stage.state = StageState::Done;
             continue;
         }
-        stage.targetTime = computeTarget(aRscs, aCfg, stage.reqIdx);
     }
 
     auto anyActive = [&]() {
@@ -501,9 +416,9 @@ void runTasks(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
                 stage.state = StageState::Done;
                 continue;
             }
+            stage.targetTime = computeTarget(aRscs, aCfg, stage.reqIdx);
             if (now < stage.targetTime) continue;
             computeReqParams(stage, aRscs.requests[stage.reqIdx].size);
-            stage.targetTime = computeTarget(aRscs, aCfg, stage.reqIdx);
             submitRead(stage);
         }
     }
@@ -516,17 +431,14 @@ void runTasks(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
 
 static void destroyStageTasks(LocalEcRscs &aRscs) {
     for (StageTasks &tasks : aRscs.stageTasks) {
-        for (doca_dma_task_memcpy *t : tasks.readTasks) {
-            if (t) doca_task_free(doca_dma_task_memcpy_as_task(t));
+        if (tasks.readTask) {
+            doca_task_free(doca_dma_task_memcpy_as_task(tasks.readTask));
         }
-        for (doca_dma_task_memcpy *t : tasks.writeDataTasks) {
-            if (t) doca_task_free(doca_dma_task_memcpy_as_task(t));
+        if (tasks.writeTask) {
+            doca_task_free(doca_dma_task_memcpy_as_task(tasks.writeTask));
         }
-        for (doca_dma_task_memcpy *t : tasks.writeRdncTasks) {
-            if (t) doca_task_free(doca_dma_task_memcpy_as_task(t));
-        }
-        if (tasks.ecTask) {
-            doca_task_free(doca_ec_task_create_as_task(tasks.ecTask));
+        for (doca_ec_task_create *t : tasks.ecTasks) {
+            if (t) doca_task_free(doca_ec_task_create_as_task(t));
         }
     }
 }
@@ -538,14 +450,12 @@ static void destroyStageBufs(LocalEcRscs &aRscs) {
                 CHECK_LOG(doca_buf_dec_refcount(b, nullptr),
                           "dec buf refcount");
         };
-        dec(bufs.ecDataBuf);
-        dec(bufs.ecRdncBuf);
-        for (doca_buf *b : bufs.readSrcBufs) dec(b);
-        for (doca_buf *b : bufs.readDstBufs) dec(b);
-        for (doca_buf *b : bufs.writeDataSrcBufs) dec(b);
-        for (doca_buf *b : bufs.writeDataDstBufs) dec(b);
-        for (doca_buf *b : bufs.writeRdncSrcBufs) dec(b);
-        for (doca_buf *b : bufs.writeRdncDstBufs) dec(b);
+        for (doca_buf *b : bufs.ecDataBufs) dec(b);
+        for (doca_buf *b : bufs.ecRdncBufs) dec(b);
+        dec(bufs.readSrcBuf);
+        dec(bufs.readDstBuf);
+        dec(bufs.writeSrcBuf);
+        dec(bufs.writeDstBuf);
     }
 }
 

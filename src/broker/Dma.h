@@ -1,10 +1,12 @@
 #pragma once
 
 #include <doca_buf.h>
+#include <doca_buf_inventory.h>
 #include <doca_dev.h>
 #include <doca_dma.h>
 #include <doca_error.h>
 #include <doca_log.h>
+#include <doca_mmap.h>
 #include <doca_pe.h>
 #include <doca_types.h>
 
@@ -13,6 +15,9 @@
 
 #include "Ctx.h"
 #include "Task.h"
+#include "common.h"
+
+constexpr size_t kDmaTmpBufSize = 128;
 
 namespace astraea {
 class Buf;
@@ -22,6 +27,12 @@ class Dma : public Ctx {
     doca_dma *mDma = nullptr;
     doca_dma_task_memcpy_completion_cb_t mMemcpySuccCb = nullptr;
     doca_dma_task_memcpy_completion_cb_t mMemcpyErrCb = nullptr;
+
+    doca_buf_inventory *mInv = nullptr;
+    doca_mmap *mMmap = nullptr;
+    void *mMemAddr = nullptr;
+
+    doca_dma_task_memcpy *mMemcpyPool[kTaskQueueSize] = {nullptr};
 
     doca_error_t start() override;
     doca_error_t stop() override;

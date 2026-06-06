@@ -10,6 +10,7 @@
 #include <doca_mmap.h>
 #include <doca_pe.h>
 
+#include <algorithm>
 #include <chrono>
 #include <climits>
 #include <cstddef>
@@ -168,6 +169,8 @@ doca_error_t Ec::start() {
 doca_error_t Ec::stop() {
     mPe->mIsStoppeds[mIsStoppedIdx] = true;
     not_empty_cv.notify_one();
+    mPe->notifyWorker();
+    gSharedData->appDatas[gAppId].hasEc = 0;
     for (u32 i = 0; i < kBufPoolSize; i++) {
         CHECK_LOG(original_doca_buf_dec_refcount(mDstBufPool[i], nullptr),
                   "destroy dst buf in pool");
@@ -216,6 +219,17 @@ static u32 calRecoverTimeCostPipeline(u32 aNbDataBlks, u32 aNbRdncBlks,
            (-0.000039 * aBlkSize + 0.033573);
 }
 
+static bool hasEcContention() {
+    const u32 nbApps = std::min(gSharedData->nbApps, kMaxNbApps);
+    u32 nbEcApps = 0;
+    for (u32 i = 0; i < nbApps; i++) {
+        if (gSharedData->appDatas[i].hasEc) {
+            nbEcApps++;
+        }
+    }
+    return nbEcApps > 1;
+}
+
 static inline doca_error_t submitCreateSubTask(Ec *aEc, doca_buf *aSrcBuf,
                                                doca_buf *aDstBuf,
                                                EcTaskCreate *aRawTask,
@@ -252,6 +266,9 @@ static inline doca_error_t submitCreateSubTask(Ec *aEc, doca_buf *aSrcBuf,
             aEc->mTail.store(nextTail, std::memory_order_release);
 
             aEc->not_empty_cv.notify_one();
+            if (aEc->mPe) {
+                aEc->mPe->notifyWorker();
+            }
 
             break;
         } else {
@@ -270,7 +287,7 @@ static inline doca_error_t submitCreateSubTask(Ec *aEc, doca_buf *aSrcBuf,
 doca_error_t EcTaskCreate::submit() {
     size_t granularity = gSharedData->appDatas[gAppId].ecGranularity;
     const size_t blkSize = mSrcBuf->mDataLen / mMat->mNbDataBlks;
-    u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
+    u32 nbStrips = hasEcContention() ? blkSize / granularity : 1;
 
     if (nbStrips > kBufPoolSize) {
         nbStrips = kBufPoolSize;
@@ -360,6 +377,9 @@ static inline doca_error_t submitRecoverSubTask(Ec *aEc, doca_buf *aSrcBuf,
             aEc->mTail.store(nextTail, std::memory_order_release);
 
             aEc->not_empty_cv.notify_one();
+            if (aEc->mPe) {
+                aEc->mPe->notifyWorker();
+            }
 
             break;
         } else {
@@ -379,7 +399,7 @@ doca_error_t EcTaskRecover::submit() {
     size_t granularity = gSharedData->appDatas[gAppId].ecGranularity;
     const size_t blkSize = mSrcBuf->mDataLen / mMat->mNbDataBlks;
     // nbStrips can be 0 if blkSize < granularity
-    u32 nbStrips = gSharedData->nbApps > 1 ? blkSize / granularity : 1;
+    u32 nbStrips = hasEcContention() ? blkSize / granularity : 1;
 
     if (nbStrips > kBufPoolSize) {
         nbStrips = kBufPoolSize;

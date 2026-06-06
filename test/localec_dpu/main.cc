@@ -99,14 +99,12 @@ static doca_error_t nbRequestsCb(void *aVal, void *aCfg) {
 }
 
 static doca_error_t traceTickUsCb(void *aVal, void *aCfg) {
-    static_cast<LocalEcCfg *>(aCfg)->traceTickUs =
-        *static_cast<double *>(aVal);
+    static_cast<LocalEcCfg *>(aCfg)->traceTickUs = *static_cast<double *>(aVal);
     return DOCA_SUCCESS;
 }
 
 static doca_error_t replaySpeedCb(void *aVal, void *aCfg) {
-    static_cast<LocalEcCfg *>(aCfg)->replaySpeed =
-        *static_cast<double *>(aVal);
+    static_cast<LocalEcCfg *>(aCfg)->replaySpeed = *static_cast<double *>(aVal);
     return DOCA_SUCCESS;
 }
 
@@ -114,30 +112,24 @@ static doca_error_t registerParams(LocalEcCfg &aCfg) {
     CHECK_RETURN(
         registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name");
-    CHECK_RETURN(
-        registerOneParam("f", "FIU trace file path", DOCA_ARGP_TYPE_STRING,
-                          tracePathCb),
-        "register trace path");
-    CHECK_RETURN(
-        registerOneParam("p", "port for host mmap descriptor",
-                          DOCA_ARGP_TYPE_INT, portCb),
-        "register port");
-    CHECK_RETURN(
-        registerOneParam("s", "concurrent pipeline stages",
-                          DOCA_ARGP_TYPE_INT, nbStagesCb),
-        "register stages");
-    CHECK_RETURN(
-        registerOneParam("n", "request count cap (0 = all)",
-                          DOCA_ARGP_TYPE_INT, nbRequestsCb),
-        "register nbRequests");
-    CHECK_RETURN(
-        registerOneParam("t", "microseconds per trace tick",
-                          DOCA_ARGP_TYPE_DOUBLE, traceTickUsCb),
-        "register trace tick");
-    CHECK_RETURN(
-        registerOneParam("r", "replay speed multiplier",
-                          DOCA_ARGP_TYPE_DOUBLE, replaySpeedCb),
-        "register replay speed");
+    CHECK_RETURN(registerOneParam("f", "FIU trace file path",
+                                  DOCA_ARGP_TYPE_STRING, tracePathCb),
+                 "register trace path");
+    CHECK_RETURN(registerOneParam("p", "port for host mmap descriptor",
+                                  DOCA_ARGP_TYPE_INT, portCb),
+                 "register port");
+    CHECK_RETURN(registerOneParam("s", "concurrent pipeline stages",
+                                  DOCA_ARGP_TYPE_INT, nbStagesCb),
+                 "register stages");
+    CHECK_RETURN(registerOneParam("n", "request count cap (0 = all)",
+                                  DOCA_ARGP_TYPE_INT, nbRequestsCb),
+                 "register nbRequests");
+    CHECK_RETURN(registerOneParam("t", "microseconds per trace tick",
+                                  DOCA_ARGP_TYPE_DOUBLE, traceTickUsCb),
+                 "register trace tick");
+    CHECK_RETURN(registerOneParam("r", "replay speed multiplier",
+                                  DOCA_ARGP_TYPE_DOUBLE, replaySpeedCb),
+                 "register replay speed");
     return DOCA_SUCCESS;
 }
 
@@ -160,7 +152,8 @@ int main(int argc, char **argv) {
     CHECK_RETURN(doca_argp_destroy(), "destroy argp");
 
     DOCA_LOG_INFO(
-        "Config: trace=%s nbStages=%u nbRequests=%u tickUs=%.3f replay=%.3f port=%u",
+        "Config: trace=%s nbStages=%u nbRequests=%u tickUs=%.3f replay=%.3f "
+        "port=%u",
         cfg.tracePath, cfg.nbStages, cfg.nbRequests, cfg.traceTickUs,
         cfg.replaySpeed, cfg.port);
 
