@@ -17,9 +17,9 @@
 constexpr size_t kEcGranularitySmall = 8192;
 constexpr size_t kEcGranularityMedium = 16384;
 constexpr size_t kEcGranularityLarge = 32768;
-constexpr size_t kDmaGranularitySmall = 262094;
-constexpr size_t kDmaGranularityMedium = 524188;
-constexpr size_t kDmaGranularityLarge = 1048376;
+constexpr size_t kDmaGranularitySmall = 262144;
+constexpr size_t kDmaGranularityMedium = 524288;
+constexpr size_t kDmaGranularityLarge = 1048576;
 
 Scheduler::Scheduler() {
     mShmFd = shm_open(kShmName, O_CREAT | O_RDWR, 0666);
@@ -194,6 +194,7 @@ static void scheduleAccelerator(
 
         allocation = allocation < 1 ? kUssPerPeriod / 2 : allocation;
         aAllocations[i] = allocation;
+        aShmData->appDatas[i].*aTimeField = allocation;
 
         aShmData->appDatas[i].*aVioField = 0;
         aShmData->appDatas[i].*aUsageField = 0;
