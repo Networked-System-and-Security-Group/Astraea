@@ -42,10 +42,12 @@ source scripts/alias.sh
 sc  # taskset -c 7 ./build/scheduler
 
 # Run CDN application with Astraea isolation
-ac  # taskset -c 1-3 env LD_PRELOAD=./build/libastraea_broker.so SLA=269 ./build/cdn_dpu -r 50000
+ac  # taskset -c 1-3 env LD_PRELOAD=./build/libastraea_broker.so EC_SLA=150 ./build/cdn_dpu -r 50000
 
 # Run Replica application with Astraea isolation
-ar  # taskset -c 4-6 env LD_PRELOAD=./build/libastraea_broker.so SLA=1250 ./build/replica_dpu
+ar  # taskset -c 4-6 env LD_PRELOAD=./build/libastraea_broker.so EC_SLA=8000 ./build/replica_dpu
+
+# EC-only apps need EC_SLA, DMA-only apps need DMA_SLA, and apps that use both need both.
 
 # Run native DOCA CDN application (no isolation)
 dc  # taskset -c 1-3 ./build/cdn_dpu -r 50000
