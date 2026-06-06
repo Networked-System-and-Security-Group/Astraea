@@ -7,20 +7,32 @@
 #include "common.h"
 #include "shm.h"
 
-u32 gSla;
+u32 gEcSla;
+u32 gDmaSla;
 u32 gShmFd;
 SharedData *gSharedData;
 u32 gAppId;
 
+static u32 readSlaEnv(const char *name) {
+    const char *slaStr = getenv(name);
+    if (slaStr) {
+        return static_cast<u32>(atof(slaStr));
+    }
+
+    return 0;
+}
+
 class Initializer {
    public:
     Initializer() {
-        const char *slaStr = getenv("SLA");
-        if (!slaStr) {
-            fprintf(stderr, "[Astraea] Error: SLA environment variable is not set\n");
+        gEcSla = readSlaEnv("EC_SLA");
+        gDmaSla = readSlaEnv("DMA_SLA");
+        if (gEcSla == 0 && gDmaSla == 0) {
+            fprintf(stderr,
+                    "[Astraea] Error: EC_SLA or DMA_SLA environment variable "
+                    "is not set\n");
             exit(EXIT_FAILURE);
         }
-        gSla = static_cast<u32>(atof(slaStr));
 
         gShmFd = shm_open(kShmName, O_RDWR, 0666);
         gSharedData = static_cast<SharedData *>(

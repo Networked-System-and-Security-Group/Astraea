@@ -74,6 +74,10 @@ static u32 &usageFor(AppData &aAppData, AccelKind aKind) {
     return aKind == AccelKind::Dma ? aAppData.dmaUsage : aAppData.ecUsage;
 }
 
+static u32 slaFor(AccelKind aKind) {
+    return aKind == AccelKind::Dma ? gDmaSla : gEcSla;
+}
+
 static u32 activeCountFor(AccelKind aKind) {
     const u32 nbApps = std::min(gSharedData->nbApps, kMaxNbApps);
     u32 nbActive = 0;
@@ -135,10 +139,11 @@ static void worker(std::stop_token aToken, Pe *aPe) {
             u32 &usage = usageFor(appData, ctx->mAccelKind);
             /* Avoid fragment to improve utilization */
             bool haveAvailTime = availTime > 0;
+            const u32 sla = slaFor(ctx->mAccelKind);
             bool nearViolated =
                 ctx->mUserDatas[submitPos].rawTask->mExpectTime -
                     std::chrono::high_resolution_clock::now() <
-                std::chrono::microseconds(static_cast<u32>(gSla * 1.1));
+                std::chrono::microseconds(static_cast<u32>(sla * 1.1));
             // if (nearViolated) {
             //     DOCA_LOG_INFO("near violated");
             // }

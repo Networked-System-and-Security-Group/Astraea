@@ -21,8 +21,7 @@ DOCA_LOG_REGISTER(MEMSCAN:DPU : CORE);
 
 extern bool gForceQuit;
 
-static void memcpySuccCb(doca_dma_task_memcpy *task,
-                         doca_data task_user_data,
+static void memcpySuccCb(doca_dma_task_memcpy *task, doca_data task_user_data,
                          doca_data ctx_user_data) {
     PageCtx *ctx = static_cast<PageCtx *>(task_user_data.ptr);
     /* Trivial inspection: touch first byte of the transferred region */
@@ -34,8 +33,7 @@ static void memcpySuccCb(doca_dma_task_memcpy *task,
     doca_task_free(doca_dma_task_memcpy_as_task(task));
 }
 
-static void memcpyErrCb(doca_dma_task_memcpy *task,
-                        doca_data task_user_data,
+static void memcpyErrCb(doca_dma_task_memcpy *task, doca_data task_user_data,
                         doca_data ctx_user_data) {
     PageCtx *ctx = static_cast<PageCtx *>(task_user_data.ptr);
     CHECK_LOG(doca_buf_set_data_len(ctx->dstBuf, 0), "reset dst buf data len");
@@ -49,9 +47,9 @@ static doca_error_t initBufs(const MemscanCfg &aCfg, MemscanRscs &aRscs) {
 
     void *hostMemBase;
     size_t hostMemSize;
-    CHECK_RETURN(doca_mmap_get_memrange(aRscs.hostMmap, &hostMemBase,
-                                        &hostMemSize),
-                 "get host mmap range");
+    CHECK_RETURN(
+        doca_mmap_get_memrange(aRscs.hostMmap, &hostMemBase, &hostMemSize),
+        "get host mmap range");
 
     char *hostBase = static_cast<char *>(hostMemBase);
     char *localBase = static_cast<char *>(aRscs.localMemAddr);
@@ -60,25 +58,23 @@ static doca_error_t initBufs(const MemscanCfg &aCfg, MemscanRscs &aRscs) {
         doca_buf *srcBuf, *dstBuf;
 
         /* src: host memory — use by_data to mark the valid data region */
-        CHECK_RETURN(
-            doca_buf_inventory_buf_get_by_data(
-                aRscs.bufInv, aRscs.hostMmap, hostBase + i * regionBytes,
-                regionBytes, &srcBuf),
-            "get src buf from host mmap");
+        CHECK_RETURN(doca_buf_inventory_buf_get_by_data(
+                         aRscs.bufInv, aRscs.hostMmap,
+                         hostBase + i * regionBytes, regionBytes, &srcBuf),
+                     "get src buf from host mmap");
 
         /* dst: local DPU memory — use by_addr; DMA fills it */
-        CHECK_RETURN(
-            doca_buf_inventory_buf_get_by_addr(
-                aRscs.bufInv, aRscs.localMmap, localBase + i * regionBytes,
-                regionBytes, &dstBuf),
-            "get dst buf from local mmap");
+        CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
+                         aRscs.bufInv, aRscs.localMmap,
+                         localBase + i * regionBytes, regionBytes, &dstBuf),
+                     "get dst buf from local mmap");
 
         aRscs.srcBufs.push_back(srcBuf);
         aRscs.dstBufs.push_back(dstBuf);
         aRscs.pageCtxs.push_back({.rscs = aRscs,
-                                   .pageId = i,
-                                   .dstAddr = localBase + i * regionBytes,
-                                   .dstBuf = dstBuf});
+                                  .pageId = i,
+                                  .dstAddr = localBase + i * regionBytes,
+                                  .dstBuf = dstBuf});
     }
     return DOCA_SUCCESS;
 }
@@ -104,7 +100,7 @@ doca_error_t init(const MemscanCfg &aCfg, MemscanRscs &aRscs) {
     size_t regionBytes = static_cast<size_t>(aCfg.regionSizeKb) * 1024;
     size_t localMemSize = aCfg.nPages * regionBytes;
     CHECK_RETURN(
-        initMemory(aCfg.nPages * 2 + 16, aRscs.dev, localMemSize,
+        initMemory(aCfg.nPages * 2 + 16 + 65536, aRscs.dev, localMemSize,
                    aRscs.localMemAddr, aRscs.localMmap, aRscs.bufInv),
         "init local memory");
 
@@ -130,11 +126,10 @@ void runTasks(const MemscanCfg &aCfg, MemscanRscs &aRscs) {
         /* Submit N_pages DMA read tasks (host memory → DPU local memory) */
         for (u32 i = 0; i < aCfg.nPages; i++) {
             doca_dma_task_memcpy *task;
-            CHECK_LOG(
-                doca_dma_task_memcpy_alloc_init(
-                    aRscs.dma, aRscs.srcBufs[i], aRscs.dstBufs[i],
-                    {.ptr = &aRscs.pageCtxs[i]}, &task),
-                "alloc dma memcpy task");
+            CHECK_LOG(doca_dma_task_memcpy_alloc_init(
+                          aRscs.dma, aRscs.srcBufs[i], aRscs.dstBufs[i],
+                          {.ptr = &aRscs.pageCtxs[i]}, &task),
+                      "alloc dma memcpy task");
             CHECK_LOG(doca_task_submit(doca_dma_task_memcpy_as_task(task)),
                       "submit dma memcpy task");
         }
@@ -145,11 +140,10 @@ void runTasks(const MemscanCfg &aCfg, MemscanRscs &aRscs) {
         }
 
         /* Record JCT: time from first submit to last completion (μs) */
-        double jctUs =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                Clock::now() - burstStart)
-                .count() /
-            1000.0;
+        double jctUs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           Clock::now() - burstStart)
+                           .count() /
+                       1000.0;
         aRscs.burstJcts.push_back(jctUs);
         nbBursts++;
 
@@ -159,17 +153,16 @@ void runTasks(const MemscanCfg &aCfg, MemscanRscs &aRscs) {
         auto elapsed = Clock::now() - burstStart;
         if (elapsed < scanPeriod) {
             auto remaining = scanPeriod - elapsed;
-            long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                          remaining)
-                          .count();
+            long ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(remaining)
+                    .count();
             struct timespec ts = {ns / 1000000000L, ns % 1000000000L};
             nanosleep(&ts, nullptr);
         }
     }
-    DOCA_LOG_INFO("Completed %u bursts (%.1f MB each)",
-                  nbBursts,
-                  static_cast<double>(aCfg.nPages * regionBytes) /
-                      (1024.0 * 1024.0));
+    DOCA_LOG_INFO(
+        "Completed %u bursts (%.1f MB each)", nbBursts,
+        static_cast<double>(aCfg.nPages * regionBytes) / (1024.0 * 1024.0));
 }
 
 void destroy(MemscanRscs &aRscs) {

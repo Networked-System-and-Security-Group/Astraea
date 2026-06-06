@@ -12,7 +12,8 @@ using u16 = uint16_t;
 using u32 = uint32_t;
 using u64 = uint64_t;
 
-extern u32 gSla;
+extern u32 gEcSla;
+extern u32 gDmaSla;
 extern u32 gShmFd;
 extern SharedData *gSharedData;
 extern u32 gAppId;

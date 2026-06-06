@@ -15,8 +15,8 @@ struct AppData {
     alignas(64) uint32_t hasDma = 0;
     alignas(64) uint32_t ecUsage = 0;
     alignas(64) uint32_t dmaUsage = 0;
-    alignas(64) size_t ecGranularity = 4096;
-    alignas(64) size_t dmaGranularity = 4096;
+    alignas(64) size_t ecGranularity = 8192;
+    alignas(64) size_t dmaGranularity = 262094;
     alignas(64) uint32_t ecVioTimes = 0;
     alignas(64) uint32_t dmaVioTimes = 0;
     alignas(64) std::atomic_flag ecTimeLock = ATOMIC_FLAG_INIT;

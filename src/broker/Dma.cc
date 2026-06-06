@@ -21,6 +21,7 @@
 
 #include "Buf.h"
 #include "Ctx.h"
+#include "Ec.h"
 #include "Pe.h"
 #include "Task.h"
 #include "common.h"
@@ -94,9 +95,8 @@ doca_error_t Dma::start() {
                   kDmaTmpBufSize / 2, &tmpSrcBuf),
               "alloc tmp dma src buf");
     CHECK_LOG(original_doca_buf_inventory_buf_get_by_args(
-                  mInv, mMmap, tmpAddr + kDmaTmpBufSize / 2,
-                  kDmaTmpBufSize / 2, tmpAddr + kDmaTmpBufSize / 2, 0,
-                  &tmpDstBuf),
+                  mInv, mMmap, tmpAddr + kDmaTmpBufSize / 2, kDmaTmpBufSize / 2,
+                  tmpAddr + kDmaTmpBufSize / 2, 0, &tmpDstBuf),
               "alloc tmp dma dst buf");
 
     for (u32 i = 0; i < kTaskQueueSize; i++) {
@@ -135,6 +135,11 @@ doca_error_t Dma::stop() {
 }
 
 doca_error_t Dma::connectToPe(Pe *aPe) {
+    if (gDmaSla == 0) {
+        DOCA_LOG_ERR("DMA_SLA environment variable is not set");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
     u32 idx = aPe->mLocks.size();
     aPe->mIsStoppeds.push_back(false);
     this->mPe = aPe;
@@ -267,21 +272,21 @@ doca_error_t DmaTaskMemcpy::submit() {
         granularity = mDataLen == 0 ? 1 : mDataLen;
     }
 
-    mNbSubtasks = hasDmaContention()
-                      ? static_cast<u32>((mDataLen + granularity - 1) /
-                                         granularity)
-                      : 1;
+    mNbSubtasks =
+        hasDmaContention()
+            ? static_cast<u32>((mDataLen + granularity - 1) / granularity)
+            : 1;
     if (mNbSubtasks == 0) {
         mNbSubtasks = 1;
     }
-    mSubtaskLen =
-        mNbSubtasks == 1 ? mDataLen : (mDataLen + mNbSubtasks - 1) / mNbSubtasks;
+    mSubtaskLen = mNbSubtasks == 1 ? mDataLen
+                                   : (mDataLen + mNbSubtasks - 1) / mNbSubtasks;
     mNextSubtaskId = 0;
     mNbCompleted.store(0, std::memory_order_release);
     mHasError.store(false, std::memory_order_release);
 
     auto curTime = std::chrono::high_resolution_clock::now();
-    mExpectTime = curTime + std::chrono::microseconds(gSla);
+    mExpectTime = curTime + std::chrono::microseconds(gDmaSla);
 
     return submitNextMemcpySubTask(this);
 }
@@ -292,8 +297,7 @@ static void memcpySubtaskComplete(doca_dma_task_memcpy *task,
                                   doca_data task_user_data,
                                   doca_data ctx_user_data, bool aHasError) {
     UserData *userData = static_cast<UserData *>(task_user_data.ptr);
-    DmaTaskMemcpy *rawTask =
-        static_cast<DmaTaskMemcpy *>(userData->rawTask);
+    DmaTaskMemcpy *rawTask = static_cast<DmaTaskMemcpy *>(userData->rawTask);
 
     if (userData->isSub) {
         CHECK_LOG(original_doca_buf_dec_refcount(userData->srcBuf, nullptr),
@@ -374,15 +378,13 @@ doca_error_t doca_dma_create(doca_dev *dev, doca_dma **dma) {
               "create dma buf inventory");
     CHECK_LOG(doca_buf_inventory_start((*myDma)->mInv),
               "start dma buf inventory");
-    CHECK_LOG(doca_mmap_create(&(*myDma)->mMmap),
-              "create dma internal mmap");
+    CHECK_LOG(doca_mmap_create(&(*myDma)->mMmap), "create dma internal mmap");
     CHECK_LOG(doca_mmap_add_dev((*myDma)->mMmap, dev),
               "add dev to dma internal mmap");
     CHECK_LOG(doca_mmap_set_memrange((*myDma)->mMmap, (*myDma)->mMemAddr,
                                      kDmaTmpBufSize),
               "set dma internal mmap memrange");
-    CHECK_LOG(doca_mmap_start((*myDma)->mMmap),
-              "start dma internal mmap");
+    CHECK_LOG(doca_mmap_start((*myDma)->mMmap), "start dma internal mmap");
 
     CHECK_LOG(original_doca_dma_create(dev, &(*myDma)->mDma), "create dma");
 
@@ -395,8 +397,7 @@ doca_error_t doca_dma_destroy(doca_dma *dma) {
     CHECK_LOG(original_doca_dma_destroy(myDma->mDma), "destroy dma");
     CHECK_LOG(doca_mmap_destroy(myDma->mMmap), "destroy dma mmap");
     free(myDma->mMemAddr);
-    CHECK_LOG(doca_buf_inventory_destroy(myDma->mInv),
-              "destroy dma buf inv");
+    CHECK_LOG(doca_buf_inventory_destroy(myDma->mInv), "destroy dma buf inv");
 
     delete myDma;
 
@@ -411,8 +412,7 @@ doca_error_t doca_dma_task_memcpy_set_conf(
     myDma->mMemcpySuccCb = task_completion_cb;
     myDma->mMemcpyErrCb = task_error_cb;
     return original_doca_dma_task_memcpy_set_conf(
-        myDma->mDma, memcpySubtaskSuccCb, memcpySubtaskErrCb,
-        num_memcpy_tasks);
+        myDma->mDma, memcpySubtaskSuccCb, memcpySubtaskErrCb, num_memcpy_tasks);
 }
 
 doca_ctx *doca_dma_as_ctx(doca_dma *dma) {
@@ -431,8 +431,7 @@ void doca_dma_task_memcpy_set_src(doca_dma_task_memcpy *task,
     myTask->mSrcBuf = reinterpret_cast<const Buf *>(src);
 }
 
-const doca_buf *doca_dma_task_memcpy_get_src(
-    const doca_dma_task_memcpy *task) {
+const doca_buf *doca_dma_task_memcpy_get_src(const doca_dma_task_memcpy *task) {
     auto myTask = reinterpret_cast<const DmaTaskMemcpy *>(task);
     return reinterpret_cast<const doca_buf *>(myTask->mSrcBuf);
 }

@@ -71,8 +71,7 @@ static doca_error_t ibdevNameCb(void *aVal, void *aCfg) {
 }
 
 static doca_error_t portCb(void *aVal, void *aCfg) {
-    static_cast<MemscanCfg *>(aCfg)->port =
-        *static_cast<uint16_t *>(aVal);
+    static_cast<MemscanCfg *>(aCfg)->port = *static_cast<uint16_t *>(aVal);
     return DOCA_SUCCESS;
 }
 
@@ -87,8 +86,7 @@ static doca_error_t nPagesCb(void *aVal, void *aCfg) {
 }
 
 static doca_error_t regionSizeKbCb(void *aVal, void *aCfg) {
-    static_cast<MemscanCfg *>(aCfg)->regionSizeKb =
-        *static_cast<u32 *>(aVal);
+    static_cast<MemscanCfg *>(aCfg)->regionSizeKb = *static_cast<u32 *>(aVal);
     return DOCA_SUCCESS;
 }
 
@@ -99,29 +97,24 @@ static doca_error_t nbBurstsCb(void *aVal, void *aCfg) {
 
 static doca_error_t registerParams(MemscanCfg &aCfg) {
     CHECK_RETURN(
-        registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING,
-                         ibdevNameCb),
+        registerOneParam("d", "ibdev name", DOCA_ARGP_TYPE_STRING, ibdevNameCb),
         "register ibdev name");
     CHECK_RETURN(
         registerOneParam("p", "port to listen for host mmap descriptor",
                          DOCA_ARGP_TYPE_INT, portCb),
         "register port");
-    CHECK_RETURN(
-        registerOneParam("t", "burst period in ms", DOCA_ARGP_TYPE_INT,
-                         tScanMsCb),
-        "register tScanMs");
-    CHECK_RETURN(
-        registerOneParam("n", "DMA pages per burst", DOCA_ARGP_TYPE_INT,
-                         nPagesCb),
-        "register nPages");
-    CHECK_RETURN(
-        registerOneParam("r", "scan region size in KB", DOCA_ARGP_TYPE_INT,
-                         regionSizeKbCb),
-        "register regionSizeKb");
-    CHECK_RETURN(
-        registerOneParam("b", "number of bursts (0 = unlimited)",
-                         DOCA_ARGP_TYPE_INT, nbBurstsCb),
-        "register nbBursts");
+    CHECK_RETURN(registerOneParam("t", "burst period in ms", DOCA_ARGP_TYPE_INT,
+                                  tScanMsCb),
+                 "register tScanMs");
+    CHECK_RETURN(registerOneParam("n", "DMA pages per burst",
+                                  DOCA_ARGP_TYPE_INT, nPagesCb),
+                 "register nPages");
+    CHECK_RETURN(registerOneParam("r", "scan region size in KB",
+                                  DOCA_ARGP_TYPE_INT, regionSizeKbCb),
+                 "register regionSizeKb");
+    CHECK_RETURN(registerOneParam("b", "number of bursts (0 = unlimited)",
+                                  DOCA_ARGP_TYPE_INT, nbBurstsCb),
+                 "register nbBursts");
     return DOCA_SUCCESS;
 }
 
@@ -130,10 +123,10 @@ int main(int argc, char **argv) {
 
     MemscanCfg cfg = {
         .ibdevName = "mlx5_0",
-        .tScanMs = 5,
+        .tScanMs = 1,
         .nPages = 64,
-        .regionSizeKb = 64,
-        .nbBursts = 100,
+        .regionSizeKb = 2048,
+        .nbBursts = 0,
         .port = 22445,
     };
 

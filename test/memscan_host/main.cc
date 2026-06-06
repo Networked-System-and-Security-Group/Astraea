@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
         .ibdevName = "mlx5_0",
         .dpuIp = "192.168.100.2",
         .port = 22445,
-        .memSizeMb = 16,
+        .memSizeMb = 512,
     };
 
     CHECK_RETURN(doca_argp_init("memscan_host", &cfg), "init argp");

@@ -187,6 +187,11 @@ doca_error_t Ec::stop() {
 }
 
 doca_error_t Ec::connectToPe(Pe *aPe) {
+    if (gEcSla == 0) {
+        DOCA_LOG_ERR("EC_SLA environment variable is not set");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
     u32 idx = aPe->mLocks.size();
     aPe->mIsStoppeds.push_back(false);
     this->mPe = aPe;
@@ -297,7 +302,7 @@ doca_error_t EcTaskCreate::submit() {
     }
 
     auto curTime = std::chrono::high_resolution_clock::now();
-    mExpectTime = std::chrono::microseconds(gSla) +
+    mExpectTime = std::chrono::microseconds(gEcSla) +
                   (curTime > gLastExpectTime ? curTime : gLastExpectTime);
     gLastExpectTime = mExpectTime;
 
@@ -409,7 +414,7 @@ doca_error_t EcTaskRecover::submit() {
     }
 
     auto curTime = std::chrono::high_resolution_clock::now();
-    mExpectTime = std::chrono::microseconds(gSla) +
+    mExpectTime = std::chrono::microseconds(gEcSla) +
                   (curTime > gLastExpectTime ? curTime : gLastExpectTime);
     gLastExpectTime = mExpectTime;
 

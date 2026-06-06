@@ -14,6 +14,13 @@
 
 #include "../broker/shm.h"
 
+constexpr size_t kEcGranularitySmall = 8192;
+constexpr size_t kEcGranularityMedium = 16384;
+constexpr size_t kEcGranularityLarge = 32768;
+constexpr size_t kDmaGranularitySmall = 262094;
+constexpr size_t kDmaGranularityMedium = 524188;
+constexpr size_t kDmaGranularityLarge = 1048376;
+
 Scheduler::Scheduler() {
     mShmFd = shm_open(kShmName, O_CREAT | O_RDWR, 0666);
     ftruncate(mShmFd, sizeof(SharedData));
@@ -46,8 +53,8 @@ Scheduler::Scheduler() {
         mShmData->appDatas[i].hasDma = 0;
         mShmData->appDatas[i].ecVioTimes = 0;
         mShmData->appDatas[i].dmaVioTimes = 0;
-        mShmData->appDatas[i].ecGranularity = 8192;
-        mShmData->appDatas[i].dmaGranularity = 8192;
+        mShmData->appDatas[i].ecGranularity = kEcGranularitySmall;
+        mShmData->appDatas[i].dmaGranularity = kDmaGranularitySmall;
         mShmData->appDatas[i].ecUsage = 0;
         mShmData->appDatas[i].dmaUsage = 0;
     }
@@ -69,61 +76,68 @@ static void signalHandler(int signum) {
     }
 }
 
-static inline size_t increaseGranularity(size_t aPreGranularity) {
+static inline size_t increaseEcGranularity(size_t aPreGranularity) {
     switch (aPreGranularity) {
-            // case 2048: {
-            //     return 4096;
-            // }
-            // case 4096: {
-            //     return 8192;
-            // }
-            // default: {
-            //     return 8192;
-            // }
-
-        case 8192: {
-            return 16384;
+        case kEcGranularitySmall: {
+            return kEcGranularityMedium;
         }
-        case 16384: {
-            return 32768;
+        case kEcGranularityMedium: {
+            return kEcGranularityLarge;
         }
         default: {
-            return 32768;
+            return kEcGranularityLarge;
         }
     }
 }
 
-static inline size_t decreaseGranularity(size_t aPreGranularity) {
+static inline size_t decreaseEcGranularity(size_t aPreGranularity) {
     switch (aPreGranularity) {
-            // case 8192: {
-            //     return 4096;
-            // }
-            // case 4096: {
-            //     return 2048;
-            // }
-            // default: {
-            //     return 2048;
-            // }
-
-        case 32768: {
-            return 16384;
+        case kEcGranularityLarge: {
+            return kEcGranularityMedium;
         }
-        case 16384: {
-            return 8192;
+        case kEcGranularityMedium: {
+            return kEcGranularitySmall;
         }
         default: {
-            return 8192;
+            return kEcGranularitySmall;
         }
     }
 }
 
-static void scheduleAccelerator(SharedData *aShmData,
-                                std::array<u32, kMaxNbApps> &aAllocations,
-                                u32 AppData::*aActiveField,
-                                u32 AppData::*aTimeField,
-                                u32 AppData::*aUsageField,
-                                size_t AppData::*aGranularityField,
-                                u32 AppData::*aVioField) {
+static inline size_t increaseDmaGranularity(size_t aPreGranularity) {
+    switch (aPreGranularity) {
+        case kDmaGranularitySmall: {
+            return kDmaGranularityMedium;
+        }
+        case kDmaGranularityMedium: {
+            return kDmaGranularityLarge;
+        }
+        default: {
+            return kDmaGranularityLarge;
+        }
+    }
+}
+
+static inline size_t decreaseDmaGranularity(size_t aPreGranularity) {
+    switch (aPreGranularity) {
+        case kDmaGranularityLarge: {
+            return kDmaGranularityMedium;
+        }
+        case kDmaGranularityMedium: {
+            return kDmaGranularitySmall;
+        }
+        default: {
+            return kDmaGranularitySmall;
+        }
+    }
+}
+
+static void scheduleAccelerator(
+    SharedData *aShmData, std::array<u32, kMaxNbApps> &aAllocations,
+    u32 AppData::*aActiveField, u32 AppData::*aTimeField,
+    u32 AppData::*aUsageField, size_t AppData::*aGranularityField,
+    u32 AppData::*aVioField, size_t (*aIncreaseGranularity)(size_t),
+    size_t (*aDecreaseGranularity)(size_t)) {
     double predictions[kMaxNbApps];
     double utilizations[kMaxNbApps];
     double predSum = 0;
@@ -135,8 +149,7 @@ static void scheduleAccelerator(SharedData *aShmData,
         }
         u32 usage = (aShmData->appDatas[i].*aUsageField);
         utilizations[i] = usage * 1.0 / aAllocations[i];
-        predictions[i] =
-            kEwmaCoef * usage + (1 - kEwmaCoef) * aAllocations[i];
+        predictions[i] = kEwmaCoef * usage + (1 - kEwmaCoef) * aAllocations[i];
         predSum += predictions[i];
         vioSum += (aShmData->appDatas[i].*aVioField);
     }
@@ -151,8 +164,7 @@ static void scheduleAccelerator(SharedData *aShmData,
         }
         if (utilizations[i] < 0.5) {
             aShmData->appDatas[i].*aGranularityField =
-                increaseGranularity(
-                    aShmData->appDatas[i].*aGranularityField);
+                aIncreaseGranularity(aShmData->appDatas[i].*aGranularityField);
         }
 
         for (u32 j = 0; j < aShmData->nbApps; j++) {
@@ -160,9 +172,8 @@ static void scheduleAccelerator(SharedData *aShmData,
                 continue;
             }
             if (j != i && (aShmData->appDatas[j].*aVioField) > 3) {
-                aShmData->appDatas[i].*aGranularityField =
-                    decreaseGranularity(
-                        aShmData->appDatas[i].*aGranularityField);
+                aShmData->appDatas[i].*aGranularityField = aDecreaseGranularity(
+                    aShmData->appDatas[i].*aGranularityField);
                 break;
             }
         }
@@ -175,16 +186,14 @@ static void scheduleAccelerator(SharedData *aShmData,
             aShmData->appDatas[i].*aVioField = 0;
             continue;
         }
-        u32 allocation =
-            vioSum == 0
-                ? predictions[i] / predSum * kUssPerPeriod
-                : predictions[i] / predSum * kAvailUssPerPeriod +
-                      (aShmData->appDatas[i].*aVioField) / vioSum *
-                          kResvUssPerPeriod;
+        u32 allocation = vioSum == 0
+                             ? predictions[i] / predSum * kUssPerPeriod
+                             : predictions[i] / predSum * kAvailUssPerPeriod +
+                                   (aShmData->appDatas[i].*aVioField) / vioSum *
+                                       kResvUssPerPeriod;
 
         allocation = allocation < 1 ? kUssPerPeriod / 2 : allocation;
         aAllocations[i] = allocation;
-        aShmData->appDatas[i].*aTimeField = allocation;
 
         aShmData->appDatas[i].*aVioField = 0;
         aShmData->appDatas[i].*aUsageField = 0;
@@ -201,11 +210,12 @@ void Scheduler::schedule() {
 
         scheduleAccelerator(mShmData, mEcAllocations, &AppData::hasEc,
                             &AppData::ecTime, &AppData::ecUsage,
-                            &AppData::ecGranularity, &AppData::ecVioTimes);
+                            &AppData::ecGranularity, &AppData::ecVioTimes,
+                            increaseEcGranularity, decreaseEcGranularity);
         scheduleAccelerator(mShmData, mDmaAllocations, &AppData::hasDma,
                             &AppData::dmaTime, &AppData::dmaUsage,
-                            &AppData::dmaGranularity,
-                            &AppData::dmaVioTimes);
+                            &AppData::dmaGranularity, &AppData::dmaVioTimes,
+                            increaseDmaGranularity, decreaseDmaGranularity);
 
         lockHelper.unlock(mShmData->nbAppsLock);
 

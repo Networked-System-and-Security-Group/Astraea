@@ -277,9 +277,8 @@ static doca_error_t initStageBufs(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
                              &bufs.ecDataBufs[i]),
                          "get ec data buf");
             CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                             aRscs.bufInv, aRscs.localMmap,
-                             stageData + rounded, rdncBytes,
-                             &bufs.ecRdncBufs[i]),
+                             aRscs.bufInv, aRscs.localMmap, stageData + rounded,
+                             rdncBytes, &bufs.ecRdncBufs[i]),
                          "get ec rdnc buf");
         }
 
@@ -288,8 +287,8 @@ static doca_error_t initStageBufs(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
                          &bufs.readSrcBuf),
                      "get read src buf");
         CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
-                         aRscs.bufInv, aRscs.localMmap, stageData,
-                         kMaxDataSize, &bufs.readDstBuf),
+                         aRscs.bufInv, aRscs.localMmap, stageData, kMaxDataSize,
+                         &bufs.readDstBuf),
                      "get read dst buf");
         CHECK_RETURN(doca_buf_inventory_buf_get_by_addr(
                          aRscs.bufInv, aRscs.localMmap, stageData,
@@ -324,11 +323,11 @@ static doca_error_t initStageTasks(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
 
         tasks.ecTasks.resize(kNbEcTaskVariants);
         for (u32 i = 0; i < kNbEcTaskVariants; ++i) {
-            CHECK_RETURN(doca_ec_task_create_allocate_init(
-                             aRscs.ec, aRscs.encMat, bufs.ecDataBufs[i],
-                             bufs.ecRdncBufs[i], {.ptr = stagePtr},
-                             &tasks.ecTasks[i]),
-                         "alloc ec task");
+            CHECK_RETURN(
+                doca_ec_task_create_allocate_init(
+                    aRscs.ec, aRscs.encMat, bufs.ecDataBufs[i],
+                    bufs.ecRdncBufs[i], {.ptr = stagePtr}, &tasks.ecTasks[i]),
+                "alloc ec task");
         }
     }
     return DOCA_SUCCESS;
@@ -356,7 +355,8 @@ doca_error_t init(const LocalEcCfg &aCfg, LocalEcRscs &aRscs) {
     /* Local mmap: one stage region per pipeline stage. */
     size_t localMmapSize = static_cast<size_t>(aCfg.nbStages) * kStageMemSize;
     size_t maxNbBufs =
-        static_cast<size_t>(aCfg.nbStages) * (2 * kNbEcTaskVariants + 4) + 16;
+        static_cast<size_t>(aCfg.nbStages) * (2 * kNbEcTaskVariants + 4) + 16 +
+        65536;
     CHECK_RETURN(initMemory(maxNbBufs, aRscs.dev, localMmapSize,
                             aRscs.localMemAddr, aRscs.localMmap, aRscs.bufInv),
                  "init local memory");
