@@ -23,8 +23,26 @@ bool gCanStart = false;
 /* Not treating gForceQuit as atomic doesn't matter a lot */
 bool gForceQuit = false;
 
+static void writeStatsFile(const char *path, double tput,
+                           const std::vector<double> &jcts) {
+    if (path == nullptr || path[0] == '\0') return;
+
+    std::ofstream file(path, std::ios::out | std::ios::trunc);
+    if (file.is_open()) {
+        file << "{'tput': " << tput << ", 'jcts': [";
+        for (size_t i = 0; i < jcts.size(); ++i) {
+            if (i > 0) file << ", ";
+            file << jcts[i];
+        }
+        file << "]}" << std::endl;
+        file.close();
+    } else {
+        std::cerr << "无法打开文件: " << path << std::endl;
+    }
+}
+
 static void processAndWriteData(const std::vector<std::vector<double>> &data,
-                                const char *path) {
+                                const char *path, double tput) {
     // 合并所有 vector<double> 到一个 vector 中
     std::vector<double> merged;
     for (const auto &vec : data) {
@@ -55,22 +73,9 @@ static void processAndWriteData(const std::vector<std::vector<double>> &data,
     std::cout << "p99: " << p99 << std::endl;
     std::cout << "p95: " << p95 << std::endl;
     std::cout << "average: " << average << std::endl;
+    std::cout << "Tput: " << tput << " Gbps" << std::endl;
 
-    // 如果 path 非空，写入文件
-    if (path != nullptr && path[0] != '\0') {
-        std::ofstream file(path, std::ios::out | std::ios::trunc);
-        if (file.is_open()) {
-            file << "[";
-            for (size_t i = 0; i < merged.size(); ++i) {
-                if (i > 0) file << ", ";
-                file << merged[i];
-            }
-            file << "]" << std::endl;
-            file.close();
-        } else {
-            std::cerr << "无法打开文件: " << path << std::endl;
-        }
-    }
+    writeStatsFile(path, tput, merged);
 }
 
 static doca_error_t ibdevNameCb(void *aIbdevName, void *aCfg) {
@@ -173,13 +178,12 @@ int main(int argc, char **argv) {
     for (std::thread &thread : threads) {
         thread.join();
     }
+    auto wallEnd = std::chrono::high_resolution_clock::now();
 
     std::vector<std::vector<double>> allCosts;
     for (const ReplicaRscs &rscs : rscss) {
         allCosts.push_back(rscs.timeCosts);
     }
-
-    processAndWriteData(allCosts, getenv("RES_PATH"));
 
     double nbProcessedGBits = 0;
     uint32_t nbOps = 0;
@@ -189,12 +193,15 @@ int main(int argc, char **argv) {
     }
 
     const double timeCost =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(gEndTime -
+        std::chrono::duration_cast<std::chrono::nanoseconds>(wallEnd -
                                                              gBeginTime)
             .count() /
         1e9;
-    const double gbps = nbProcessedGBits / timeCost;
-    const double ops = nbOps / timeCost;
+    const double gbps = timeCost > 0.0 ? nbProcessedGBits / timeCost : 0.0;
+    const double ops = timeCost > 0.0 ? nbOps / timeCost : 0.0;
+
+    processAndWriteData(allCosts, getenv("RES_PATH"), gbps);
+
     DOCA_LOG_INFO(
         "Processed %.2fGb in %.2fs, throughput is %.2fGbps, ops is %.2f",
         nbProcessedGBits, timeCost, gbps, ops);

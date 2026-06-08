@@ -4,6 +4,7 @@
 #include <signal.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +19,28 @@ DOCA_LOG_REGISTER(MEMSCAN:DPU : MAIN);
 
 bool gForceQuit = false;
 
-static void printStats(const std::vector<double> &jcts) {
+static void writeStatsFile(const char *path, double tput,
+                           const std::vector<double> &jcts) {
+    if (path == nullptr || path[0] == '\0') return;
+
+    std::ofstream f(path, std::ios::out | std::ios::trunc);
+    if (f.is_open()) {
+        f << "{'tput': " << tput << ", 'jcts': [";
+        for (size_t i = 0; i < jcts.size(); ++i) {
+            if (i > 0) f << ", ";
+            f << jcts[i];
+        }
+        f << "]}" << std::endl;
+    } else {
+        std::cerr << "Cannot open output file: " << path << std::endl;
+    }
+}
+
+static void printStats(const std::vector<double> &jcts, double processedGB,
+                       double wallSeconds) {
+    double gbps = wallSeconds > 0.0 ? (processedGB * 8.0) / wallSeconds : 0.0;
+    writeStatsFile(getenv("RES_PATH"), gbps, jcts);
+
     if (jcts.empty()) {
         std::cout << "No bursts completed." << std::endl;
         return;
@@ -33,29 +55,20 @@ static void printStats(const std::vector<double> &jcts) {
 
     size_t p95idx = static_cast<size_t>((sorted.size() - 1) * 0.95);
     size_t p99idx = static_cast<size_t>((sorted.size() - 1) * 0.99);
+    double burstRate =
+        wallSeconds > 0.0 ? static_cast<double>(jcts.size()) / wallSeconds
+                          : 0.0;
 
     std::cout << "Bursts:   " << sorted.size() << std::endl;
+    std::cout << "Wall:     " << wallSeconds << " s" << std::endl;
+    std::cout << "Data:     " << processedGB << " GB" << std::endl;
+    std::cout << "Tput:     " << gbps << " Gbps" << std::endl;
+    std::cout << "Rate:     " << burstRate << " burst/s" << std::endl;
     std::cout << "Avg JCT:  " << avg << " us" << std::endl;
     std::cout << "p95 JCT:  " << sorted[p95idx] << " us" << std::endl;
     std::cout << "p99 JCT:  " << sorted[p99idx] << " us" << std::endl;
     std::cout << "Min JCT:  " << sorted.front() << " us" << std::endl;
     std::cout << "Max JCT:  " << sorted.back() << " us" << std::endl;
-
-    /* Write raw (arrival-order) values to RES_PATH for CDF plotting */
-    const char *path = getenv("RES_PATH");
-    if (path && path[0] != '\0') {
-        std::ofstream f(path, std::ios::out | std::ios::trunc);
-        if (f.is_open()) {
-            f << "[";
-            for (size_t i = 0; i < jcts.size(); ++i) {
-                if (i > 0) f << ", ";
-                f << jcts[i];
-            }
-            f << "]" << std::endl;
-        } else {
-            std::cerr << "Cannot open output file: " << path << std::endl;
-        }
-    }
 }
 
 static void signalHandler(int signum) {
@@ -154,9 +167,18 @@ int main(int argc, char **argv) {
     int enter = 0;
     while (enter != '\r' && enter != '\n') enter = getchar();
 
+    auto wallBegin = std::chrono::high_resolution_clock::now();
     runTasks(cfg, rscs);
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double wallSec = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         wallEnd - wallBegin)
+                         .count() /
+                     1e9;
 
-    printStats(rscs.burstJcts);
+    double processedGB =
+        static_cast<double>(rscs.burstJcts.size()) * cfg.nPages *
+        cfg.regionSizeKb * 1024.0 / (1024.0 * 1024.0 * 1024.0);
+    printStats(rscs.burstJcts, processedGB, wallSec);
 
     destroy(rscs);
     return EXIT_SUCCESS;
