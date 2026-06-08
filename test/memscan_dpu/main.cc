@@ -4,6 +4,7 @@
 #include <signal.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -148,6 +149,10 @@ int main(int argc, char **argv) {
         DOCA_LOG_ERR("Failed to initialise memscan DPU resources");
         return EXIT_FAILURE;
     }
+
+    DOCA_LOG_INFO("Press Enter to run Memscan DPU workload");
+    int enter = 0;
+    while (enter != '\r' && enter != '\n') enter = getchar();
 
     runTasks(cfg, rscs);
 

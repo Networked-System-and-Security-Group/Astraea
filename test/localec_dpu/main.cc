@@ -4,6 +4,8 @@
 #include <signal.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -169,6 +171,10 @@ int main(int argc, char **argv) {
         DOCA_LOG_ERR("Failed to initialise localec DPU resources");
         return EXIT_FAILURE;
     }
+
+    DOCA_LOG_INFO("Press Enter to run LocalEC DPU workload");
+    int enter = 0;
+    while (enter != '\r' && enter != '\n') enter = getchar();
 
     auto wallBegin = std::chrono::high_resolution_clock::now();
     runTasks(cfg, rscs);
