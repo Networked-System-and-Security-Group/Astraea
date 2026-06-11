@@ -1,114 +1,106 @@
 # Astraea
 
-Astraea is a fine-grained and lightweight DPU performance isolation framework built on NVIDIA DOCA SDK. It enables performance isolation for multi-tenant applications on DPU accelerators through offline performance modeling, adaptive task splitting, and workload-guided scheduling—without modifications to the hardware or vendor SDK.
+Astraea is a fine-grained, lightweight performance isolation framework for
+Data Processing Units (DPUs). Built on NVIDIA DOCA, it isolates and schedules
+hardware accelerator resources, such as erasure coding (EC) and DMA, among
+co-located applications without requiring modifications to the DPU hardware or
+vendor SDK.
 
-## Prerequisites
+Astraea provides three core mechanisms:
 
-1. **BlueField-3 DPU/SuperNIC**
-2. **DOCA 2.9.x LTS** (only 2.9.x versions are supported; 3.x versions are incompatible)
-3. C++ compiler that supports C++20 standard
-4. `cmake` (≥ 3.20) and `ninja` (or `make`)
+- Offline profiling to model the relationship between task parameters and
+  accelerator execution time.
+- Adaptive task splitting and result reassembly for fine-grained scheduling.
+- Workload-guided resource allocation that balances application SLAs,
+  fairness, and accelerator utilization.
 
-## Build and Run
+## Requirements
 
-### Build
+- NVIDIA BlueField-3 DPU/SuperNIC
+- NVIDIA DOCA 3.3
+- A compiler with C++20 support
+- CMake 3.20 or later
+- Ninja or Make
+
+The build system uses `pkg-config` to locate the following DOCA components:
+`doca-common`, `doca-argp`, `doca-rdma`, `doca-dma`, and
+`doca-erasure-coding`.
+
+## Build
+
+The recommended build generator is Ninja:
 
 ```bash
 cmake -B build -G Ninja
 cmake --build build
 ```
 
-All binaries and the shared library are placed directly in `build/`:
-
-```
-build/
-├── libastraea_broker.so   # Astraea Broker (LD_PRELOAD target)
-├── scheduler              # Astraea Scheduler daemon
-├── cdn_dpu / cdn_client
-├── replica_dpu / replica_client
-├── microbenchmark
-└── ec_prof
-```
-
-### Run
-
-`scripts/alias.sh` defines commonly used command aliases for testing:
+Make can also be used:
 
 ```bash
-# Load aliases
-source scripts/alias.sh
-
-# Run the scheduler (Astraea Scheduler)
-sc  # taskset -c 7 ./build/scheduler
-
-# Run CDN application with Astraea isolation
-ac  # taskset -c 1-3 env LD_PRELOAD=./build/libastraea_broker.so EC_SLA=150 ./build/cdn_dpu -r 50000
-
-# Run Replica application with Astraea isolation
-ar  # taskset -c 4-6 env LD_PRELOAD=./build/libastraea_broker.so EC_SLA=8000 ./build/replica_dpu
-
-# EC-only apps need EC_SLA, DMA-only apps need DMA_SLA, and apps that use both need both.
-
-# Run native DOCA CDN application (no isolation)
-dc  # taskset -c 1-3 ./build/cdn_dpu -r 50000
-
-# Run native DOCA Replica application (no isolation)
-dr  # taskset -c 4-6 ./build/replica_dpu
-
-# Microbenchmark
-ds  # Small tasks (8KB block)
-db  # Large tasks (64KB block)
-as  # Small tasks with Astraea
-ab  # Large tasks with Astraea
+cmake -B build
+cmake --build build
 ```
+
+All executables and `libastraea_broker.so` are generated directly under
+`build/`.
 
 ## Project Structure
 
-```
+```text
 Astraea/
-├── CMakeLists.txt              # Project build configuration
-├── scripts/
-│   ├── alias.sh                # Common command aliases
-│   └── kill.sh                 # Process termination script
+├── CMakeLists.txt                       # CMake build configuration
 ├── src/
-│   ├── broker/                 # Astraea Broker (AB)
-│   │   │                       # Dynamic library injected via LD_PRELOAD
-│   │   ├── initialize.cc       # Initialization logic (shared memory, app registration)
-│   │   ├── shm.h               # Shared memory data structure definitions
-│   │   ├── Ctx.cc/h            # DOCA Context interception and management
-│   │   ├── Pe.cc/h             # Progress Engine interception
-│   │   ├── Ec.cc/h             # Erasure Coding task interception and splitting
-│   │   ├── Task.cc/h           # Task queue and submission management
-│   │   ├── Buf.cc/h            # Buffer management and zero-copy optimization
-│   │   └── Rdma.cc/h           # RDMA task handling
-│   │
-│   └── scheduler/              # Astraea Scheduler (AS)
-│       │                       # Global scheduling daemon
-│       ├── main.cc             # Scheduler entry point
-│       └── Scheduler.cc/h      # Scheduling algorithm (EWMA prediction, resource allocation, SLA compensation)
-│
+│   ├── broker/                          # Astraea Broker (AB)
+│   │   ├── initialize.cc                # Initialization, SLA parsing, and application registration
+│   │   ├── shm.h                        # Shared-memory structures used by AS and AB
+│   │   ├── Ctx.cc/.h                    # DOCA context interception and management
+│   │   ├── Pe.cc/.h                     # DOCA progress engine interception
+│   │   ├── Task.cc/.h                   # Virtual task queues and task submission
+│   │   ├── Ec.cc/.h                     # EC task splitting, submission, and result reassembly
+│   │   ├── Dma.cc/.h                    # DMA task splitting and submission
+│   │   ├── Rdma.cc/.h                   # RDMA call handling
+│   │   └── Buf.cc/.h                    # DOCA buffer management
+│   └── scheduler/                       # Astraea Scheduler (AS)
+│       ├── main.cc                      # AS entry point
+│       └── Scheduler.cc/.h              # Resource allocation and granularity adjustment
 └── test/
-    ├── common/                 # Common utility library (shared by all test apps)
-    │   ├── arg.cc              # Command-line argument handling
-    │   ├── dev.cc              # DOCA device management
-    │   ├── ec.cc/h             # Erasure Coding accelerator wrapper
-    │   ├── memory.cc/h         # Memory management (mmap, buffer inventory)
-    │   ├── rdma.cc/h           # RDMA communication wrapper
-    │   └── socket.cc/h         # Socket communication utilities
-    │
-    ├── cdn_client/             # CDN client (latency-sensitive application)
-    ├── cdn_dpu/                # CDN DPU-side handler
-    ├── replica_client/         # Replica client (throughput-intensive application)
-    ├── replica_dpu/            # Replica DPU-side handler
-    ├── microbenchmark/         # EC accelerator latency microbenchmark
-    └── profiling/
-        └── ec/                 # Offline EC accelerator performance modeling
+    ├── common/                          # Shared DOCA utilities for test applications
+    ├── profiling/
+    │   ├── ec/                          # Offline profiling for the EC accelerator
+    │   └── dma/                         # Offline profiling for the DMA accelerator
+    ├── microbenchmark/                  # Accelerator microbenchmarks
+    ├── cdn_client/                      # CDN client
+    ├── cdn_dpu/                         # Latency-sensitive CDN DPU application
+    ├── replica_client/                  # Replication client
+    ├── replica_dpu/                     # Throughput-sensitive replication DPU application
+    ├── memscan_host/                    # Memory Scan host component
+    ├── memscan_dpu/                     # DMA-based memory scanning DPU application
+    ├── localec_host/                    # Local EC host component
+    └── localec_dpu/                     # Local encoding DPU application using DMA and EC
 ```
 
-### Core Components
+## Core Components
 
-- **Astraea Broker (AB)**: A lightweight dynamic library transparently injected into applications via `LD_PRELOAD`. It intercepts DOCA API calls, performs adaptive task splitting, and manages task submission based on scheduler policies.
+### Astraea Scheduler (AS)
 
-- **Astraea Scheduler (AS)**: A global scheduling daemon that periodically (default: every millisecond) makes resource allocation decisions. It uses EWMA to predict workload demands, dynamically adjusts task splitting granularity, and ensures long-term fairness through SLA violation compensation.
+AS is a global scheduling daemon. It periodically reads resource usage and SLA
+violation statistics from each application, computes inter-application
+resource allocations independently for accelerators such as EC and DMA, and
+dynamically adjusts each application's task-splitting granularity. The current
+implementation uses a default scheduling period of 1 ms.
 
-- **Shared Memory**: Enables efficient communication between AS and AB, conveying resource quotas, usage statistics, and SLA violation information.
+### Astraea Broker (AB)
+
+AB is built as `libastraea_broker.so` and injected into each application
+through `LD_PRELOAD`. It intercepts DOCA API calls, maintains per-application
+virtual task queues, and performs task splitting, subtask submission, and
+result reassembly according to the allocations and granularities selected by
+AS. This design preserves DOCA's asynchronous programming model.
+
+### AS-AB Coordination
+
+AS and the AB instance in each application communicate through shared memory.
+AS publishes resource allocations and task-splitting granularities. AB enforces
+these decisions and reports resource usage and SLA violation statistics back
+to AS, forming a continuous scheduling feedback loop.
